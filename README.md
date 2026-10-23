@@ -6,7 +6,7 @@ Tout tient dans un seul binaire (Windows et Linux), sans serveur externe ni tél
 
 ## Démarrage
 
-1. Windows : double-cliquer `Omega-0.1.0-x64.msi` (installation par utilisateur, sans droits admin, raccourci Bureau). Linux : `target/release/omega`.
+1. Windows : double-cliquer `Omega-0.2.0-x64.msi` (installation par utilisateur, sans droits admin, raccourci Bureau). Linux : `target/release/omega`.
 2. Au premier lancement, la fenêtre ⚙ Paramètres s'ouvre. Coller la clé **Kimi** (platform.kimi.ai) et/ou **DeepSeek** (platform.deepseek.com) et la clé **Jev** (console.typesafe.ai ; sans elle, un routeur local prend le relais).
 3. Choisir un dossier de travail (📁 en bas à gauche). Par défaut : `%APPDATA%/Omega/workspace`.
 

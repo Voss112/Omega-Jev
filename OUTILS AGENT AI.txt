@@ -1,0 +1,13 @@
+
+
+- DeepSeek-V4.1-Flash-1017 (API) (uniquement à la synthèse de code et à l'exécution chirurgicale)
+- Jev (API) (uniquement pour tâches de contrôle)
+
+- STRIX : https://github.com/usestrix/strix
+- Superpowers : https://github.com/obra/superpowers
+- RTK (Rust Token Killer - https://github.com/rtk-ai/rtk
+- code-review-graph : https://github.com/tirth8205/code-review-graph 
+- serena : https://github.com/oraios/serena
+- lazy-tool : https://github.com/mcp-shark/lazy-tool
+- caverman : https://github.com/JuliusBrussee/caveman
+

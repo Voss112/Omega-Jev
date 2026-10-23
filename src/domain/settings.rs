@@ -1,0 +1,116 @@
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+use super::engine::Engine;
+
+/// Output verbosity (caveman family). Shorter = fewer output tokens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Style {
+    Normal,
+    Concise,
+    Caveman,
+    /// Default: maximum output-token economy.
+    #[default]
+    Ultra,
+}
+
+impl Style {
+    pub const ALL: [Style; 4] = [Self::Normal, Self::Concise, Self::Caveman, Self::Ultra];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Concise => "Concis",
+            Self::Caveman => "Caveman",
+            Self::Ultra => "Ultra-caveman",
+        }
+    }
+
+    pub fn prompt(self) -> &'static str {
+        match self {
+            Self::Normal => "Style: clear, structured, complete.",
+            Self::Concise => "Style: concise. Bullets over paragraphs. Only changed code.",
+            Self::Caveman => {
+                "Style: terse like smart caveman. Drop articles, filler, pleasantries, hedging; fragments OK. \
+                 Keep every technical fact; code, numbers, errors exact. Only changed code."
+            }
+            Self::Ultra => {
+                "Style: ultra-terse telegraphic. Abbreviate common terms (DB, fn, cfg, req, impl). \
+                 Arrows for causality (X → Y). One word when enough. Code/errors verbatim."
+            }
+        }
+    }
+}
+
+/// Flat user-facing configuration (one toggle per option is intended).
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    /// Active System Two engine (switchable from the composer).
+    pub engine: Engine,
+    pub kimi_key: String,
+    pub kimi_url: String,
+    pub kimi_model: String,
+    pub deepseek_key: String,
+    pub deepseek_url: String,
+    pub deepseek_model: String,
+    pub jev_key: String,
+    pub jev_url: String,
+    pub jev_model: String,
+    pub style: Style,
+    pub max_steps: u32,
+    pub auto_approve: bool,
+    /// Bypass permissions: every approval is auto-granted (hard-blocked commands stay blocked).
+    pub bypass: bool,
+    /// Ask before every file change (diff shown).
+    pub confirm_edits: bool,
+    /// Run the project's checker (cargo check, tsc…) after edits and feed errors back.
+    pub auto_diagnostics: bool,
+    /// Summarize older history once a request exceeds this many prompt tokens.
+    pub compact_at: u64,
+    pub proxy: String,
+    pub require_vpn: bool,
+    pub ip_lookup: bool,
+    pub workspace: Option<PathBuf>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            engine: Engine::default(),
+            kimi_key: String::new(),
+            kimi_url: "https://api.moonshot.ai/v1".into(),
+            kimi_model: "kimi-k3.1-pro".into(),
+            deepseek_key: String::new(),
+            deepseek_url: "https://api.deepseek.com".into(),
+            deepseek_model: "deepseek-flash".into(),
+            jev_key: String::new(),
+            jev_url: "https://api.typesafe.ai/v1/systemone".into(),
+            jev_model: "jev-latest".into(),
+            style: Style::default(),
+            max_steps: 64,
+            auto_approve: true,
+            bypass: false,
+            confirm_edits: false,
+            auto_diagnostics: true,
+            compact_at: 100_000,
+            proxy: String::new(),
+            require_vpn: false,
+            ip_lookup: true,
+            workspace: None,
+        }
+    }
+}
+
+impl Settings {
+    /// (url, key, model) configured for `engine`.
+    pub fn endpoint(&self, engine: Engine) -> (&str, &str, &str) {
+        match engine {
+            Engine::Kimi => (&self.kimi_url, &self.kimi_key, &self.kimi_model),
+            Engine::DeepSeek => (&self.deepseek_url, &self.deepseek_key, &self.deepseek_model),
+        }
+    }
+}

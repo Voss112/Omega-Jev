@@ -1,0 +1,69 @@
+[package]
+name = "omega"
+version = "0.1.0"
+edition = "2024"
+description = "Omega — agent IA local et anonyme : Jev (System One) route, Kimi K3.1 Pro ou DeepSeek V4.1 Flash (System Two) exécute"
+license = "MIT"
+publish = false
+
+[dependencies]
+# UI
+eframe = "0.37"
+egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark", "better_syntax_highlighting"] }
+rfd = "0.17"
+open = "5"
+
+# Runtime & réseau
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "stream", "socks", "gzip", "brotli", "http2", "charset", "query"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+futures-util = "0.3"
+
+# Données
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "7"
+anyhow = "1"
+regex = "1"
+similar = "3"
+base64 = "0.23"
+
+# Intelligence code (remplace Serena + code-review-graph + rtk/ripgrep)
+tree-sitter = "0.27"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-bash = "0.25"
+petgraph = "0.8"
+ignore = "0.4"
+grep-searcher = "0.1"
+grep-regex = "0.1"
+
+# Web local
+scraper = "0.29"
+htmd = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[build-dependencies]
+embed-resource = "3"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 2

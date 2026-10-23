@@ -1,0 +1,26 @@
+1 ICON "omega.ico"
+
+1 VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040C04B0"
+    BEGIN
+      VALUE "CompanyName", "Omega"
+      VALUE "FileDescription", "Omega - agent IA local et anonyme"
+      VALUE "FileVersion", "0.1.0"
+      VALUE "InternalName", "omega"
+      VALUE "OriginalFilename", "omega.exe"
+      VALUE "ProductName", "Omega"
+      VALUE "ProductVersion", "0.1.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x40C, 1200
+  END
+END

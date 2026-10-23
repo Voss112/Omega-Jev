@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Per-user installer (no admin rights): %LOCALAPPDATA%\Programs\Omega + Desktop and Start menu shortcuts. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Omega" Language="1036" Codepage="1252" Version="$(var.Version)" Manufacturer="Omega"
+           UpgradeCode="a1435599-7eaa-489f-a2b0-3d12151c2b58">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited"
+             Description="Omega - agent IA local et anonyme (Jev + Kimi K3.1 Pro / DeepSeek V4.1 Flash)" />
+    <MajorUpgrade DowngradeErrorMessage="Une version plus récente d'Omega est déjà installée." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="OmegaIcon" SourceFile="$(var.Root)\assets\omega.ico" />
+    <Property Id="ARPPRODUCTICON" Value="OmegaIcon" />
+
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.Root)\installer\License.rtf" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.Root)\installer\banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.Root)\installer\dialog.bmp" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Lancer Omega" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WixShellExecTarget" Value="[#OmegaExe]" />
+    <CustomAction Id="LaunchOmega" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
+    <UI>
+      <UIRef Id="WixUI_Minimal" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchOmega">
+        WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed
+      </Publish>
+    </UI>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="UserPrograms" Name="Programs">
+          <Directory Id="INSTALLDIR" Name="Omega" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder" />
+      <Directory Id="DesktopFolder" />
+    </Directory>
+
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="MainExe" Guid="76e26051-a890-4e2a-9988-f12ee745e24c">
+        <File Id="OmegaExe" Name="omega.exe" Source="$(var.Root)\target\release\omega.exe" />
+        <RegistryValue Root="HKCU" Key="Software\Omega" Name="InstallDir" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallDir" On="uninstall" />
+        <RemoveFolder Id="RemoveUserPrograms" Directory="UserPrograms" On="uninstall" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="3c0bb518-1fea-4868-bd5f-b799f41b1430">
+        <Shortcut Id="DesktopLnk" Name="Omega" Description="Agent IA local et anonyme" Target="[INSTALLDIR]omega.exe"
+                  WorkingDirectory="INSTALLDIR" Icon="OmegaIcon" />
+        <RegistryValue Root="HKCU" Key="Software\Omega" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="e95ed723-0bf5-4975-81a1-cb4ff6f35b2c">
+        <Shortcut Id="StartLnk" Name="Omega" Description="Agent IA local et anonyme" Target="[INSTALLDIR]omega.exe"
+                  WorkingDirectory="INSTALLDIR" Icon="OmegaIcon" />
+        <RegistryValue Root="HKCU" Key="Software\Omega" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Main" Title="Omega" Level="1">
+      <ComponentRef Id="MainExe" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Product>
+</Wix>

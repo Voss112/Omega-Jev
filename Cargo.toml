@@ -15,7 +15,7 @@ open = "5"
 
 # Runtime & réseau
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "stream", "socks", "gzip", "brotli", "http2", "charset", "query"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "stream", "socks", "gzip", "brotli", "http2", "charset", "query", "form"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures-util = "0.3"
 
@@ -30,6 +30,7 @@ anyhow = "1"
 regex = "1"
 similar = "3"
 base64 = "0.23"
+ring = "0.17"
 
 # Intelligence code (remplace Serena + code-review-graph + rtk/ripgrep)
 tree-sitter = "0.27"

@@ -32,6 +32,11 @@ pub fn settings() -> PathBuf {
     root().join("settings.toml")
 }
 
+/// Sealed OAuth credentials, one file per subscription provider.
+pub fn creds() -> PathBuf {
+    root().join("credentials")
+}
+
 pub fn ensure() -> io::Result<()> {
-    [conversations(), web_cache(), workspace()].iter().try_for_each(fs::create_dir_all)
+    [conversations(), web_cache(), workspace(), creds()].iter().try_for_each(fs::create_dir_all)
 }

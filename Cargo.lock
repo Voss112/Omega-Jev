@@ -3037,6 +3037,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rfd",
+ "ring",
  "rustls",
  "scraper",
  "serde",

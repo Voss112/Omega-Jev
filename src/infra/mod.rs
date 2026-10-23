@@ -1,5 +1,6 @@
 //! Adapters to the outside world: disk, network, processes, AI providers.
 
+pub mod auth;
 pub mod http;
 pub mod jev;
 pub mod llm;

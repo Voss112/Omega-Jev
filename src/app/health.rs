@@ -82,16 +82,6 @@ pub async fn check(env: &Env) -> Vec<Health> {
     ]
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn audit_skill_health_is_green_without_node() {
-        let detail = super::audit_skill().expect("bundle présent");
-        assert!(detail.contains("fichiers"));
-        assert!(detail.contains("node") || detail.contains("validateurs"));
-    }
-}
-
 fn project_rules(env: &Env) -> Result<String> {
     let (name, text) = prompts::project_rules(&env.workspace())
         .ok_or_else(|| anyhow::anyhow!("aucun {} à la racine du projet", prompts::RULE_FILES[0]))?;
@@ -102,7 +92,11 @@ fn playbooks() -> Result<String> {
     let ok = playbook::ALL.iter().filter(|p| !p.description().is_empty() && p.body().len() > 500).count();
     anyhow::ensure!(ok == playbook::ALL.len(), "{ok}/{} playbooks valides", playbook::ALL.len());
     let generic = playbook::ALL.iter().filter(|p| p.group == playbook::Group::Superpowers).count();
-    Ok(format!("{generic} Superpowers + 1 audit sécurité (Cloudflare) · chargés à la demande par Jev"))
+    Ok(format!(
+        "{generic} playbooks {} + 1 {} (Cloudflare) · chargés à la demande par Jev",
+        playbook::Group::Superpowers.label(),
+        playbook::Group::Security.label()
+    ))
 }
 
 /// The audit skill is embedded: green even without Node, which only gates the JSON validators.
@@ -127,4 +121,21 @@ async fn jev(env: &Env) -> Result<String> {
     let q = [("ok".to_owned(), Question::noul("Is this a health check?"))];
     let answers = jev.ask(json!("health check"), &q).await?;
     Ok(format!("{} tokens/appel", answers.tokens))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn audit_skill_health_is_green_without_node() {
+        let detail = super::audit_skill().expect("bundle présent");
+        assert!(detail.contains("fichiers"));
+        assert!(detail.contains("node") || detail.contains("validateurs"));
+    }
+
+    #[test]
+    fn playbooks_health_counts_both_groups() {
+        let detail = super::playbooks().expect("playbooks présents");
+        assert!(detail.contains("15 playbooks Superpowers"), "{detail}");
+        assert!(detail.contains("Audit sécurité"), "{detail}");
+    }
 }

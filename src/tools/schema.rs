@@ -96,6 +96,11 @@ fn spec(kind: ToolKind) -> Value {
                 ("timeout", "integer", "run: seconds, default 300", false),
             ],
         ),
+        ToolKind::AuditKit => (
+            "Install the six-phase security-audit skill (Cloudflare) into the workspace, then follow its SKILL.md. \
+             Writes .omega/skills/security-audit/ only; never touches findings.json.",
+            &[],
+        ),
     };
     let desc = if kind == ToolKind::Shell { shell_desc.as_str() } else { desc };
     let props: Map<String, Value> = params

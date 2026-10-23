@@ -1,5 +1,6 @@
 //! Native tool belt (single binary): replaces Serena, code-review-graph, rtk, lazy-tool, caveman, Semgrep-lite.
 
+pub mod audit;
 pub mod change;
 pub mod checkpoint;
 pub mod clihub;
@@ -120,6 +121,7 @@ async fn exec(ctx: &ToolCtx<'_>, kind: ToolKind, a: Args<'_>) -> Result<ToolOutp
             "run" => clihub::run(ctx, &a.str("name")?, a.list("args"), a.num("timeout").unwrap_or(300)).await,
             other => Err(anyhow!("unknown action `{other}` (search|info|install|run)")),
         },
+        ToolKind::AuditKit => blocking(move || audit::install(&root)).await,
     };
     text.map(ToolOutput::from)
 }

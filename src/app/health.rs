@@ -78,7 +78,18 @@ pub async fn check(env: &Env) -> Vec<Health> {
         entry("Web", "Web local (BM25)", Ok(format!("{pages} pages en cache"))),
         entry("Sécurité", "Scanner statique", sec),
         entry("Sécurité", "Garde shell + sandbox", grd),
+        entry("Sécurité", "Skill audit (Cloudflare)", audit_skill()),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn audit_skill_health_is_green_without_node() {
+        let detail = super::audit_skill().expect("bundle présent");
+        assert!(detail.contains("fichiers"));
+        assert!(detail.contains("node") || detail.contains("validateurs"));
+    }
 }
 
 fn project_rules(env: &Env) -> Result<String> {
@@ -90,7 +101,16 @@ fn project_rules(env: &Env) -> Result<String> {
 fn playbooks() -> Result<String> {
     let ok = playbook::ALL.iter().filter(|p| !p.description().is_empty() && p.body().len() > 500).count();
     anyhow::ensure!(ok == playbook::ALL.len(), "{ok}/{} playbooks valides", playbook::ALL.len());
-    Ok(format!("{ok} playbooks · chargés à la demande par Jev"))
+    let generic = playbook::ALL.iter().filter(|p| p.group == playbook::Group::Superpowers).count();
+    Ok(format!("{generic} Superpowers + 1 audit sécurité (Cloudflare) · chargés à la demande par Jev"))
+}
+
+/// The audit skill is embedded: green even without Node, which only gates the JSON validators.
+fn audit_skill() -> Result<String> {
+    let files = crate::tools::audit::FILES.len();
+    anyhow::ensure!(files >= 20, "bundle incomplet : {files} fichiers");
+    let node = crate::infra::process::blocking("node").arg("--version").output().is_ok_and(|o| o.status.success());
+    Ok(format!("{files} fichiers · validateurs: node {}", if node { "détecté" } else { "absent (lecture du schéma)" }))
 }
 
 async fn engine(env: &Env, engine: Engine) -> Result<String> {

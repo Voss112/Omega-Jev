@@ -34,7 +34,7 @@ Linux : paquets X11/Wayland usuels requis à l'exécution (comme toute app egui)
 | RTK | compression des sorties shell (ANSI, bruit, tests passés, doublons, tête/queue) |
 | caveman | 4 styles de sortie (Normal → Ultra-caveman) |
 | Superpowers | 15 playbooks officiels (MIT) embarqués ; Jev en choisit au plus un par message, injecté une seule fois par discussion |
-| Strix (méthode) | compétence « Audit sécurité » défensive : revue du code, scanner statique, correctifs |
+| Audit sécurité (Cloudflare) | skill `security-audit` embarqué verbatim (MIT, 20 fichiers, schéma `report-schema.json`) ; Jev le route sur `security`, l'outil `audit_kit` le dépose dans `<workspace>/.omega/skills/security-audit/`, les validateurs `.cjs` ne tournent que si Node est présent |
 | Semgrep / mcp-scan | `security_scan` : 25 règles CWE, secrets masqués ; garde shell déterministe + avis Jev + approbation |
 | CLI-Anything (HKUDS) | outil `cli_anything` : registre officiel (100+ CLIs : GIMP, Blender, LibreOffice, OBS, Zotero…), mode d'emploi SKILL.md à la demande, installation pip/npm validée par vous, exécution `--json` sans shell |
 | Recherche web | DuckDuckGo anonyme, tri des résultats par Jev Score, pages en Markdown dense, cache local BM25 |

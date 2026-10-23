@@ -11,6 +11,7 @@ use crate::{
         chat::{Conversation, Message, Role},
         playbook::Playbook,
         route::Route,
+        skill::Skill,
     },
     tools::{compress::clip, fs, schema},
 };
@@ -31,6 +32,13 @@ pub fn preamble(route: &Route, root: &Path, first_turn: bool, loaded: &[&str]) -
     }
     if route.risky() {
         p.push_str("\n[guard] Security-sensitive: validate inputs, no unbounded shell, never print secrets.");
+    }
+    if route.skill == Skill::Security {
+        p.push_str(
+            "\n[audit] Six phases: reconnaissance → hunting par couverture → validation des candidats → findings.json \
+             (verdicts confirmed/needs_validation/rejected) → vérification indépendante → REPORT.md. \
+             Un record = une preuve fichier:ligne. Zéro faux positif : ce qui n'est pas démontré est SUSPECT.",
+        );
     }
     if route.needs_apps() {
         p.push_str(
@@ -89,4 +97,39 @@ fn wire(m: &Message, compact: bool) -> Value {
 /// Index of the KEEP_TURNS-th last user message; tool outputs before it are compacted.
 fn compaction_cutoff(conv: &Conversation) -> usize {
     conv.messages.iter().enumerate().filter(|(_, m)| m.role == Role::User).map(|(i, _)| i).rev().nth(KEEP_TURNS - 1).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::route::Source;
+
+    fn security_route() -> Route {
+        Route {
+            skill: Skill::Security,
+            source: Source::Local,
+            confidence: 1.0,
+            web: 0.0,
+            code: 0.6,
+            risk: 1.0,
+            blast: 0.0,
+            apps: 0.0,
+            playbook: Some("security-audit".into()),
+        }
+    }
+
+    #[test]
+    fn security_turns_carry_the_audit_hint() {
+        let p = preamble(&security_route(), std::path::Path::new("."), false, &[]);
+        assert!(p.contains("[playbook:security-audit]"));
+        assert!(p.contains("[audit]") && p.contains("findings.json"));
+        assert!(p.contains("[guard]"));
+    }
+
+    #[test]
+    fn an_already_loaded_playbook_is_not_resent() {
+        let p = preamble(&security_route(), std::path::Path::new("."), false, &["security-audit"]);
+        assert!(p.contains("Follow it again"));
+        assert_eq!(p.matches("security-audit").count(), 1, "le corps ne doit pas être renvoyé");
+    }
 }

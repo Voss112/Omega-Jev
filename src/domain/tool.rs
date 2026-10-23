@@ -19,10 +19,12 @@ pub enum ToolKind {
     WebSearch,
     WebFetch,
     CliAnything,
+    /// Installs the six-phase security-audit skill into the workspace.
+    AuditKit,
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 15] = [
+    pub const ALL: [ToolKind; 16] = [
         Self::ListDir,
         Self::ReadFile,
         Self::Outline,
@@ -38,6 +40,7 @@ impl ToolKind {
         Self::WebSearch,
         Self::WebFetch,
         Self::CliAnything,
+        Self::AuditKit,
     ];
     /// Loaded whenever code is involved: navigation, impact and security analysis are all read-only.
     pub const READ: &[ToolKind] =
@@ -61,12 +64,13 @@ impl ToolKind {
             Self::WebSearch => "web_search",
             Self::WebFetch => "web_fetch",
             Self::CliAnything => "cli_anything",
+            Self::AuditKit => "audit_kit",
         }
     }
 
     /// No side effect: safe to run concurrently.
     pub fn read_only(self) -> bool {
-        !matches!(self, Self::EditFile | Self::ReplaceSymbol | Self::WriteFile | Self::Shell | Self::CliAnything)
+        !matches!(self, Self::EditFile | Self::ReplaceSymbol | Self::WriteFile | Self::Shell | Self::CliAnything | Self::AuditKit)
     }
 
     pub fn parse(name: &str) -> Option<Self> {
@@ -84,6 +88,7 @@ impl ToolKind {
             Self::SecurityScan => "🛡",
             Self::WebSearch | Self::WebFetch => "🌐",
             Self::CliAnything => "🧩",
+            Self::AuditKit => "📋",
         }
     }
 }

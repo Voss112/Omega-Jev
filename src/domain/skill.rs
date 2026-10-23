@@ -77,8 +77,8 @@ const SPECS: [Spec; 10] = [
         label: "Audit sécurité",
         criteria: "Security audit, vulnerabilities, pentest, secrets, hardening, threat model",
         prompt: "Map attack surface: inputs, authn/z, crypto, FFI/unsafe, shell, deserialization, SSRF, path traversal, injection, secrets, deps. Run security_scan, confirm each finding by reading code. Each: severity, CWE, exploit scenario, fix. Unconfirmed = SUSPECT. Zero false positives.",
-        tools: &[ListDir, ReadFile, Outline, FindSymbol, Grep, BlastRadius, SecurityScan, Shell, WebSearch],
-        playbook: None,
+        tools: &[ListDir, ReadFile, Outline, FindSymbol, Grep, BlastRadius, SecurityScan, Shell, WebSearch, AuditKit],
+        playbook: Some("security-audit"),
     },
     Spec {
         id: "refactor",
@@ -158,5 +158,17 @@ impl Skill {
 
     pub fn parse(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|s| s.id() == id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn security_skill_uses_the_cloudflare_playbook() {
+        assert_eq!(Skill::Security.default_playbook(), Some("security-audit"));
+        assert!(Skill::Security.tools().contains(&ToolKind::SecurityScan));
+        assert!(crate::domain::playbook::Playbook::find("security-audit").is_some());
     }
 }

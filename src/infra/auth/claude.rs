@@ -39,19 +39,18 @@ pub fn split_code(pasted: &str) -> (String, String) {
     }
 }
 
-pub async fn exchange(http: &Client, pasted: &str, p: &pkce::Pkce) -> Result<Cred> {
+pub async fn exchange(http: &Client, pasted: &str, verifier: &str, default_state: &str) -> Result<Cred> {
     let (code, state) = split_code(pasted);
-    let state = if state.is_empty() { p.state.clone() } else { state };
+    let state = if state.is_empty() { default_state.to_owned() } else { state };
     let body = json!({
         "grant_type": "authorization_code",
         "code": code,
         "state": state,
         "client_id": CLIENT_ID,
         "redirect_uri": REDIRECT,
-        "code_verifier": p.verifier,
+        "code_verifier": verifier,
     });
-    let cred = token(http, &body).await?;
-    Ok(cred)
+    token(http, &body).await
 }
 
 pub async fn refresh(http: &Client, cred: &Cred) -> Result<Cred> {

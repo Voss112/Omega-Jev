@@ -8,6 +8,7 @@ use super::{App, Live, build_env};
 use crate::{
     app::{Event, agent, health, prompts},
     domain::{
+        auth::{AuthMode, Cred, Provider},
         chat::{Conversation, Message, Role},
         settings::Settings,
     },
@@ -180,6 +181,102 @@ impl App {
             self.notify(n);
         }
         self.restart_background();
+    }
+
+    /// Opens the provider page and starts the OAuth dance.
+    pub(super) fn connect(&mut self, provider: Provider) {
+        let started = match provider {
+            Provider::Claude => Ok(crate::app::login::claude_start()),
+            Provider::Gemini => crate::app::login::gemini_start(),
+        };
+        match started {
+            Ok((url, login)) => {
+                let _ = open::that(&url);
+                if provider == Provider::Gemini {
+                    let (env, emit, task_login) = (self.env.clone(), self.emit.clone(), login.clone());
+                    let task = self.spawn(async move {
+                        let result = crate::app::login::await_gemini(&env.http, &task_login).await;
+                        emit.send(Event::Connected { provider, result: result.map_err(|e| format!("{e:#}")) });
+                    });
+                    self.login_task = Some(task);
+                }
+                self.login = Some(login);
+            }
+            Err(e) => self.notify(format!("Connexion {} impossible : {e:#}", provider.label())),
+        }
+    }
+
+    /// Exchanges the code the user pasted from the provider page.
+    pub(super) fn submit_code(&mut self) {
+        let Some(login) = self.login.clone() else { return };
+        if login.paste.trim().is_empty() {
+            return;
+        }
+        let (env, emit, provider) = (self.env.clone(), self.emit.clone(), login.provider);
+        self.spawn(async move {
+            let result = crate::app::login::finish_paste(&env.http, &login, login.paste.trim()).await;
+            emit.send(Event::Connected { provider, result: result.map_err(|e| format!("{e:#}")) });
+        });
+    }
+
+    pub(super) fn cancel_login(&mut self) {
+        if let Some(task) = self.login_task.take() {
+            task.abort();
+        }
+        self.login = None;
+    }
+
+    /// Imports the session the official Claude Code CLI already logged in.
+    pub(super) fn import_claude(&mut self) {
+        let result = crate::app::login::import_cli();
+        self.connected(Provider::Claude, result.map_err(|e| format!("{e:#}")));
+    }
+
+    /// Persists fresh credentials, switches the provider to subscription mode and selects it.
+    pub(super) fn connected(&mut self, provider: Provider, result: Result<Cred, String>) {
+        match result {
+            Ok(cred) => {
+                if let Err(e) = crate::app::login::persist(provider, &cred) {
+                    self.notify(format!("Jetons non enregistrés : {e:#}"));
+                    return;
+                }
+                let mut settings = self.settings.clone();
+                match provider {
+                    Provider::Claude => settings.claude_auth = AuthMode::Subscription,
+                    Provider::Gemini => settings.gemini_auth = AuthMode::Subscription,
+                }
+                settings.engine = provider.engine();
+                self.apply_settings(settings);
+                if let Some(task) = self.login_task.take() {
+                    task.abort();
+                }
+                self.login = None;
+                let account = if cred.account.is_empty() { provider.label().to_owned() } else { cred.account.clone() };
+                self.notify(format!("{} connecté · {account}", provider.label()));
+                if provider == Provider::Claude {
+                    self.fetch_plan_usage();
+                }
+            }
+            Err(e) => {
+                if let Some(login) = &mut self.login {
+                    login.status = e;
+                } else {
+                    self.notify(e);
+                }
+            }
+        }
+    }
+
+    /// Best-effort: any failure silently leaves the usage section hidden.
+    fn fetch_plan_usage(&mut self) {
+        let (env, emit) = (self.env.clone(), self.emit.clone());
+        let _task = self.spawn(async move {
+            let Some(auth) = crate::infra::auth::Auth::load(Provider::Claude) else { return };
+            let Ok(token) = auth.fresh(&env.http).await else { return };
+            if let Some(windows) = crate::infra::auth::claude::usage(&env.http, &token).await {
+                emit.send(Event::PlanUsage { provider: Provider::Claude, windows });
+            }
+        });
     }
 
     pub(super) fn pick_workspace(&mut self) {

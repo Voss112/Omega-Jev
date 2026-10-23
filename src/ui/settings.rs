@@ -6,12 +6,15 @@ use eframe::egui::{
 
 use super::{
     App,
-    theme::{self, CARD, FAINT, MUTED, TEXT},
+    theme::{self, CARD, FAINT, GREEN, MUTED, TEXT},
     widgets,
 };
 use crate::{
-    domain::settings::{Settings, Style},
-    infra::paths,
+    domain::{
+        auth::{AuthMode, Provider},
+        settings::{Settings, Style},
+    },
+    infra::{auth::Auth, paths},
 };
 
 enum Action {
@@ -19,20 +22,29 @@ enum Action {
     Cancel,
 }
 
+/// What the subscription section asks the app to do.
+enum SubAction {
+    Connect(Provider),
+    Import,
+}
+
 pub fn show(app: &mut App, ctx: &egui::Context) {
     let Some(draft) = app.settings_draft.as_mut() else { return };
     let mut action = None;
+    let mut sub = None;
     let modal = Modal::new(Id::unique("settings"))
         .frame(Frame::new().fill(CARD).corner_radius(CornerRadius::same(18)).inner_margin(Margin::same(24)))
         .show(ctx, |ui| {
             ui.set_width(600.0);
             ui.label(RichText::new("Paramètres").font(theme::bold(22.0)).color(TEXT));
             ui.label(
-                RichText::new("Seules les deux clés API sont nécessaires. Tout le reste est réglé de façon optimale.")
+                RichText::new("Connectez un abonnement ou saisissez une clé API. Tout le reste est réglé de façon optimale.")
                     .color(MUTED),
             );
             ui.add_space(12.0);
-            ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.55).show(ui, |ui| form(ui, draft));
+            ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.55).show(ui, |ui| {
+                sub = form(ui, draft);
+            });
             ui.add_space(10.0);
             ui.label(RichText::new(format!("Données locales : {}", paths::root().display())).size(11.5).color(FAINT));
             ui.add_space(6.0);
@@ -62,21 +74,82 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         Some(Action::Cancel) => app.settings_draft = None,
         None => {}
     }
+    match sub {
+        Some(SubAction::Connect(provider)) => app.connect(provider),
+        Some(SubAction::Import) => app.import_claude(),
+        None => {}
+    }
 }
 
-fn form(ui: &mut Ui, s: &mut Settings) {
+fn form(ui: &mut Ui, s: &mut Settings) -> Option<SubAction> {
+    let mut sub = None;
+    section(ui, "Abonnements");
+    ui.label(
+        RichText::new(
+            "Connexion par abonnement : la page du fournisseur s'ouvre, vous validez sur le site, Omega reçoit le jeton.",
+        )
+        .size(12.0)
+        .color(MUTED),
+    );
+    for provider in Provider::ALL {
+        ui.add_space(6.0);
+        grid(ui, provider.id(), |ui| {
+            ui.label(label(provider.label()));
+            ui.horizontal(|ui| {
+                let account = Auth::load(provider).map(|a| a.account()).unwrap_or_default();
+                if account.is_empty() {
+                    ui.label(RichText::new("Non connecté").size(12.5).color(FAINT));
+                } else {
+                    ui.label(RichText::new(format!("✅ Connecté · {account}")).size(12.5).color(GREEN));
+                }
+                if widgets::ghost(ui, "Se connecter").clicked() {
+                    sub = Some(SubAction::Connect(provider));
+                }
+                if provider == Provider::Claude && widgets::ghost(ui, "Importer la session Claude Code").clicked() {
+                    sub = Some(SubAction::Import);
+                }
+            });
+            ui.end_row();
+            ui.label(label("Mode"));
+            let mut mode = match provider {
+                Provider::Claude => s.claude_auth,
+                Provider::Gemini => s.gemini_auth,
+            };
+            ComboBox::from_id_salt(("auth", provider.id()))
+                .selected_text(match mode {
+                    AuthMode::Subscription => "Abonnement",
+                    AuthMode::ApiKey => "Clé API",
+                })
+                .width(200.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut mode, AuthMode::Subscription, "Abonnement");
+                    ui.selectable_value(&mut mode, AuthMode::ApiKey, "Clé API");
+                });
+            match provider {
+                Provider::Claude => s.claude_auth = mode,
+                Provider::Gemini => s.gemini_auth = mode,
+            }
+            ui.end_row();
+        });
+    }
     section(ui, "Clés API");
     grid(ui, "keys", |ui| {
         secret(ui, "Kimi (Moonshot)", &mut s.kimi_key, "sk-…  (platform.kimi.ai)");
         secret(ui, "DeepSeek", &mut s.deepseek_key, "sk-…  (platform.deepseek.com)");
+        secret(ui, "Claude (API)", &mut s.claude_key, "sk-ant-… (platform.claude.com) — inutile en abonnement");
+        secret(ui, "Gemini (API)", &mut s.gemini_key, "AIza… (aistudio.google.com) — inutile en abonnement");
         secret(ui, "Jev (TypeSafe)", &mut s.jev_key, "console.typesafe.ai — requis pour le routage Jev");
     });
     section(ui, "Modèles");
     grid(ui, "models", |ui| {
         text(ui, "URL Kimi", &mut s.kimi_url, "");
-        text(ui, "Modèle Kimi", &mut s.kimi_model, "kimi-k3.1-pro (effort low imposé)");
+        text(ui, "Modèle Kimi", &mut s.kimi_model, "kimi-k3.1-pro");
         text(ui, "URL DeepSeek", &mut s.deepseek_url, "");
-        text(ui, "Modèle DeepSeek", &mut s.deepseek_model, "deepseek-flash = V4.1 Flash 1017 (effort max)");
+        text(ui, "Modèle DeepSeek", &mut s.deepseek_model, "deepseek-flash = V4.1 Flash 1017");
+        text(ui, "URL Claude", &mut s.claude_url, "https://api.anthropic.com (ignorée en abonnement)");
+        text(ui, "Modèle Claude", &mut s.claude_model, "claude-sonnet-4-5");
+        text(ui, "URL Gemini", &mut s.gemini_url, "endpoint OpenAI-compatible des clés API");
+        text(ui, "Modèle Gemini", &mut s.gemini_model, "gemini-2.5-pro");
         text(ui, "URL Jev", &mut s.jev_url, "");
         text(ui, "Modèle Jev", &mut s.jev_model, "jev-latest ou version épinglée");
     });
@@ -137,6 +210,7 @@ fn form(ui: &mut Ui, s: &mut Settings) {
             s.workspace = None;
         }
     });
+    sub
 }
 
 fn section(ui: &mut Ui, title: &str) {

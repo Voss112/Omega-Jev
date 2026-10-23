@@ -5,6 +5,7 @@ mod cards;
 mod chat;
 mod composer;
 mod events;
+mod login;
 mod panel;
 mod settings;
 mod sidebar;
@@ -24,7 +25,11 @@ use uuid::Uuid;
 
 use crate::{
     app::{Approval, Emitter, Env, Event, health},
-    domain::{chat::Conversation, settings::Settings},
+    domain::{
+        auth::{Provider, Window},
+        chat::Conversation,
+        settings::Settings,
+    },
     infra::{paths, store, vpn},
     tools::{checkpoint, webindex::WebIndex},
 };
@@ -76,6 +81,11 @@ pub struct App {
     /// Conversation whose delete button was clicked once (awaiting confirmation).
     delete_armed: Option<(Uuid, Instant)>,
     settings_draft: Option<Settings>,
+    /// In-flight OAuth dance, if any.
+    login: Option<crate::app::login::Login>,
+    login_task: Option<JoinHandle<()>>,
+    /// Last fetched plan usage of a subscription.
+    plan_usage: Option<(Provider, Vec<Window>, Instant)>,
     show_panel: bool,
     focus_composer: bool,
     notice: Option<(String, Instant)>,
@@ -115,6 +125,9 @@ impl App {
             search: String::new(),
             delete_armed: None,
             settings_draft: None,
+            login: None,
+            login_task: None,
+            plan_usage: None,
             show_panel: true,
             focus_composer: true,
             notice: None,
@@ -236,5 +249,6 @@ impl eframe::App for App {
             .frame(Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(24, 0)))
             .show(ui, |ui| chat::show(self, ui));
         settings::show(self, &ctx);
+        login::show(self, &ctx);
     }
 }

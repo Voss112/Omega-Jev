@@ -29,6 +29,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         tools(app, ui);
         network(app, ui);
         economy(app, ui);
+        subscription(app, ui);
         verdict(app, ui);
         ui.add_space(16.0);
     });
@@ -138,8 +139,44 @@ fn economy(app: &App, ui: &mut Ui) {
     });
 }
 
-fn verdict(app: &App, ui: &mut Ui) {
-    let Some(route) = app.current_conv().and_then(|c| c.messages.iter().rev().find_map(|m| m.route.as_ref())) else { return };
+fn subscription(app: &App, ui: &mut Ui) {
+    if !app.settings.engine.subscription_capable() {
+        return;
+    }
+    ui.add_space(10.0);
+    widgets::section(ui, "Abonnement");
+    ui.add_space(4.0);
+    widgets::card(ui, BORDER, |ui| {
+        ui.set_width(ui.available_width());
+        let connected = app.env.llm.subscription();
+        let account = app.env.llm.account();
+        let label = if connected {
+            let suffix = if account.is_empty() { String::new() } else { format!(" · {account}") };
+            format!("✅ {} connecté{suffix}", app.settings.engine.label())
+        } else {
+            format!("{} : non connecté (⚙ Paramètres)", app.settings.engine.label())
+        };
+        ui.label(RichText::new(label).size(12.5).color(if connected { GREEN } else { MUTED }));
+        let usage = app.plan_usage.as_ref().filter(|(p, _, _)| p.engine() == app.settings.engine);
+        if let Some((_, windows, at)) = usage {
+            ui.add_space(4.0);
+            for w in windows {
+                ui.horizontal(|ui| {
+                    ui.add_sized([58.0, 16.0], eframe::egui::Label::new(RichText::new(&w.label).size(11.5).color(MUTED)));
+                    ui.add(
+                        ProgressBar::new(w.fraction)
+                            .desired_height(6.0)
+                            .fill(CYAN)
+                            .text(RichText::new(format!("{:.0} %", w.fraction * 100.0)).size(10.5)),
+                    );
+                });
+            }
+            ui.label(RichText::new(format!("relevé il y a {} s", at.elapsed().as_secs())).size(10.5).color(FAINT));
+        }
+    });
+}
+
+fn verdict(app: &App, ui: &mut Ui) {    let Some(route) = app.current_conv().and_then(|c| c.messages.iter().rev().find_map(|m| m.route.as_ref())) else { return };
     ui.add_space(10.0);
     widgets::section(ui, "Dernier verdict Jev");
     ui.add_space(4.0);

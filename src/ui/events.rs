@@ -1,5 +1,7 @@
 //! Applies runtime events to UI state.
 
+use std::time::Instant;
+
 use super::App;
 use crate::app::Event;
 
@@ -67,6 +69,8 @@ impl App {
                 }
                 Event::Health(h) => self.health = h,
                 Event::Vpn(v) => self.vpn = Some(v),
+                Event::Connected { provider, result } => self.connected(provider, result),
+                Event::PlanUsage { provider, windows } => self.plan_usage = Some((provider, windows, Instant::now())),
             }
         }
     }

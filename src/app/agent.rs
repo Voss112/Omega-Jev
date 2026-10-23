@@ -26,7 +26,7 @@ pub async fn run(mut conv: Conversation, env: Arc<Env>, emit: Emitter) {
 }
 
 async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64) -> Result<()> {
-    ensure!(env.llm.configured(), "Clé API {} manquante — ouvrez ⚙ Paramètres.", env.llm.engine.label());
+    ensure!(env.llm.configured(), "{} non configuré — connectez l'abonnement ou saisissez une clé dans ⚙ Paramètres.", env.llm.engine.label());
     // Compaction is an optimization: on failure the turn simply runs on the full history.
     let _ = compact::maybe(conv, env, emit).await;
     let root = env.workspace();

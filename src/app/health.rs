@@ -28,9 +28,11 @@ fn entry(group: &'static str, name: &'static str, result: Result<String>) -> Hea
 }
 
 pub async fn check(env: &Env) -> Vec<Health> {
-    let (kimi, deepseek, jev, ddg, sh, apps) = tokio::join!(
+    let (kimi, deepseek, claude, gemini, jev, ddg, sh, apps) = tokio::join!(
         engine(env, Engine::Kimi),
         engine(env, Engine::DeepSeek),
+        engine(env, Engine::Claude),
+        engine(env, Engine::Gemini),
         jev(env),
         web::probe(&env.http),
         shell::probe(),
@@ -57,6 +59,8 @@ pub async fn check(env: &Env) -> Vec<Health> {
     vec![
         entry("Moteurs IA", Engine::Kimi.label(), kimi),
         entry("Moteurs IA", Engine::DeepSeek.label(), deepseek),
+        entry("Moteurs IA", Engine::Claude.label(), claude),
+        entry("Moteurs IA", Engine::Gemini.label(), gemini),
         entry("Moteurs IA", "Jev System One", jev),
         entry("Code", "Tree-sitter AST", ts),
         entry("Code", "Graphe d'impact", gr),
@@ -91,10 +95,11 @@ fn playbooks() -> Result<String> {
 
 async fn engine(env: &Env, engine: Engine) -> Result<String> {
     let llm = Llm::new(env.http.clone(), &env.settings, engine);
-    anyhow::ensure!(llm.configured(), "clé API absente ou URL non HTTPS");
+    anyhow::ensure!(llm.configured(), "aucun identifiant (clé API ou abonnement)");
     llm.ping().await?;
     let active = if engine == env.settings.engine { " · actif" } else { "" };
-    Ok(format!("{} · effort {}{active}", llm.model, llm.effort.label()))
+    let mode = if llm.subscription() { "abonnement" } else { "clé API" };
+    Ok(format!("{} · effort {} · {mode}{active}", llm.model, llm.effort.label()))
 }
 
 async fn jev(env: &Env) -> Result<String> {

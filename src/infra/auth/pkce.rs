@@ -68,11 +68,6 @@ pub async fn await_code(port: u16, state: &str, timeout: Duration) -> Result<Str
 }
 
 /// Reserves a free loopback port by binding and immediately releasing it.
-pub async fn free_port() -> Result<u16> {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.context("port libre")?;
-    Ok(listener.local_addr()?.port())
-}
-
 async fn serve(listener: TcpListener, state: &str) -> Result<String> {
     loop {
         let (mut socket, _) = listener.accept().await?;
@@ -175,7 +170,7 @@ mod tests {
     #[tokio::test]
     async fn loopback_captures_the_code_once() {
         let pkce = Pkce::new();
-        let port = free_port().await.unwrap();
+        let port = local_port();
         let state = pkce.state.clone();
         let server = tokio::spawn(async move { await_code(port, &state, Duration::from_secs(5)).await });
         assert!(get(port, &format!("state={}&code=abc123", pkce.state)).await);
@@ -184,9 +179,13 @@ mod tests {
 
     #[tokio::test]
     async fn loopback_rejects_a_foreign_state() {
-        let port = free_port().await.unwrap();
+        let port = local_port();
         let server = tokio::spawn(async move { await_code(port, "good", Duration::from_secs(5)).await });
         assert!(get(port, "state=bad&code=abc123").await);
         assert!(server.await.unwrap().is_err());
+    }
+
+    fn local_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
     }
 }

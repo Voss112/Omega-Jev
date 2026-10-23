@@ -5,12 +5,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Completion, Delta};
-pub use super::error_text;
 use crate::{
-    domain::{
-        chat::{ToolCall, Usage},
-        engine::Effort,
-    },
+    domain::{chat::ToolCall, engine::Effort},
     infra::auth::claude::SYSTEM_PREFIX,
 };
 
@@ -200,20 +196,10 @@ struct Event {
     error: Option<Value>,
 }
 
-/// Full (non-streamed) usage shape of a Messages response, used by the health probe.
-pub fn usage_of(v: &Value) -> Usage {
-    Usage {
-        prompt: v["usage"]["input_tokens"].as_u64().unwrap_or(0),
-        completion: v["usage"]["output_tokens"].as_u64().unwrap_or(0),
-        cached: v["usage"]["cache_read_input_tokens"].as_u64().unwrap_or(0),
-        reasoning: 0,
-        jev: 0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::llm::error_text;
 
     #[test]
     fn messages_are_converted_with_tools() {

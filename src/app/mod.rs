@@ -4,6 +4,7 @@ pub mod agent;
 pub mod compact;
 pub mod context;
 pub mod health;
+pub mod login;
 pub mod prompts;
 pub mod router;
 
@@ -20,6 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
+        auth::{Cred, Provider, Window},
         chat::{Message, Summary, Usage},
         route::Route,
         settings::Settings,
@@ -110,6 +112,16 @@ pub enum Event {
     Done {
         conv: Uuid,
         error: Option<String>,
+    },
+    /// A subscription finished (or failed) its OAuth dance.
+    Connected {
+        provider: Provider,
+        result: Result<Cred, String>,
+    },
+    /// Best-effort plan usage of a subscription.
+    PlanUsage {
+        provider: Provider,
+        windows: Vec<Window>,
     },
     Health(Vec<health::Health>),
     Vpn(VpnInfo),

@@ -23,7 +23,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         ui.add_space(4.0);
         ui.vertical(|ui| {
             ui.label(RichText::new("Omega").font(theme::bold(19.0)).color(TEXT));
-            ui.label(RichText::new(format!("Jev × {} · local", app.settings.engine.label())).size(11.5).color(MUTED));
+            ui.label(RichText::new(format!("Jev × {} · effort {} · local", app.settings.engine.label(), app.settings.effort.get(app.settings.engine).label())).size(11.5).color(MUTED));
         });
     });
     ui.add_space(16.0);

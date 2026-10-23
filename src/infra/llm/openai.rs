@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Completion, Delta};
-pub use super::error_text;use crate::domain::{
+use crate::domain::{
     chat::{ToolCall, Usage},
     engine::{Effort, Engine},
 };
@@ -82,11 +82,6 @@ pub fn usage(u: &Value) -> Usage {
         reasoning: n("/completion_tokens_details/reasoning_tokens").unwrap_or(0),
         jev: 0,
     }
-}
-
-/// Error message out of an OpenAI-compatible error body.
-pub fn api_error(body: &str) -> String {
-    error_text(body)
 }
 
 #[derive(Deserialize)]

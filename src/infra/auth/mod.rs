@@ -55,7 +55,7 @@ pub fn read_from(dir: &Path, provider: Provider) -> Option<Cred> {
     serde_json::from_str(&secret::open(raw.trim())).ok()
 }
 
-/// Shared handle on one provider's credentials: reads, refreshes and persists them.
+/// State of one provider's credentials
 pub struct Auth {
     provider: Provider,
     dir: PathBuf,
@@ -70,15 +70,7 @@ impl Auth {
         Some(Arc::new(Self { provider, dir, state: Mutex::new(cred) }))
     }
 
-    /// In-memory only (tests, fresh login before the file is written).
-    pub fn ephemeral(provider: Provider, dir: PathBuf, cred: Cred) -> Arc<Self> {
-        Arc::new(Self { provider, dir, state: Mutex::new(cred) })
-    }
-
-    pub fn provider(&self) -> Provider {
-        self.provider
-    }
-
+    /// In-memory only (fresh login before the file is written).
     pub fn access(&self) -> String {
         self.lock().access.clone()
     }

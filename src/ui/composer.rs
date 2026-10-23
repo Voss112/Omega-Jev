@@ -10,7 +10,11 @@ use super::{
     chat::column,
     theme::{ACCENT, AMBER, BORDER, FAINT, HOVER, MUTED, RAISED, RED, TEXT},
 };
-use crate::domain::{engine::Engine, settings::Settings};
+use crate::domain::{
+    auth::AuthMode,
+    engine::{Effort, Engine},
+    settings::Settings,
+};
 
 pub fn show(app: &mut App, ui: &mut Ui) {
     let id = Id::unique("composer");
@@ -101,16 +105,16 @@ fn bypass_toggle(app: &mut App, ui: &mut Ui) {
     }
 }
 
-/// Engine switch; each engine keeps its own fixed effort (Kimi low, DeepSeek max).
+/// Engine switch plus the effort of the active engine. Both are user choices, never the router's.
 fn engine_picker(app: &mut App, ui: &mut Ui) {
-    let label = |e: Engine| format!("⚡ {} · effort {}", e.label(), app.settings.effort.get(e).label());
+    let mode = |e: Engine| app.settings.auth_mode(e);
     let mut engine = app.settings.engine;
     ComboBox::from_id_salt("engine")
-        .selected_text(RichText::new(label(engine)).size(12.5).color(MUTED))
-        .width(250.0)
+        .selected_text(RichText::new(engine_label(engine, mode(engine))).size(12.5).color(MUTED))
+        .width(220.0)
         .show_ui(ui, |ui| {
             for e in Engine::ALL {
-                ui.selectable_value(&mut engine, e, label(e));
+                ui.selectable_value(&mut engine, e, engine_label(e, mode(e)));
             }
         })
         .response
@@ -120,6 +124,39 @@ fn engine_picker(app: &mut App, ui: &mut Ui) {
         if !app.env.llm.configured() {
             app.settings_draft = Some(app.settings.clone());
         }
+    }
+
+    let mut effort = app.settings.effort.get(app.settings.engine);
+    ComboBox::from_id_salt("effort")
+        .selected_text(RichText::new(effort_label(effort)).size(12.5).color(MUTED))
+        .width(180.0)
+        .show_ui(ui, |ui| {
+            for e in Effort::ALL {
+                ui.selectable_value(&mut effort, e, effort_label(e));
+            }
+        })
+        .response
+        .on_hover_text("Budget de réflexion du moteur actif. Off = réponse directe, sans réflexion.");
+    if effort != app.settings.effort.get(app.settings.engine) {
+        let mut settings = app.settings.clone();
+        settings.effort.set(settings.engine, effort);
+        app.apply_settings(settings);
+    }
+}
+
+pub(super) fn engine_label(engine: Engine, mode: AuthMode) -> String {
+    let tag = match mode {
+        AuthMode::Subscription if engine.subscription_capable() => "abonnement",
+        _ => "clé API",
+    };
+    format!("⚡ {} · {tag}", engine.label())
+}
+
+pub(super) fn effort_label(effort: Effort) -> String {
+    if effort == Effort::Off {
+        "effort Off (sans réflexion)".to_owned()
+    } else {
+        format!("effort {}", effort.label())
     }
 }
 
@@ -140,4 +177,18 @@ fn action_button(ui: &mut Ui, busy: bool, ready: bool) -> bool {
         p.text(rect.center(), Align2::CENTER_CENTER, "↑", FontId::proportional(19.0), if ready { Color32::WHITE } else { MUTED });
     }
     resp.on_hover_text(if busy { "Arrêter (Échap)" } else { "Envoyer (Entrée)" }).clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_show_engine_mode_and_effort() {
+        assert_eq!(engine_label(Engine::Kimi, AuthMode::ApiKey), "⚡ Kimi K3.1 Pro · clé API");
+        assert_eq!(engine_label(Engine::Claude, AuthMode::Subscription), "⚡ Claude · abonnement");
+        assert_eq!(engine_label(Engine::Kimi, AuthMode::Subscription), "⚡ Kimi K3.1 Pro · clé API");
+        assert_eq!(effort_label(Effort::Off), "effort Off (sans réflexion)");
+        assert_eq!(effort_label(Effort::Max), "effort Max");
+    }
 }

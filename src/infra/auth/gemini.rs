@@ -28,12 +28,12 @@ pub fn authorize_url(p: &pkce::Pkce, redirect: &str) -> String {
     )
 }
 
-pub async fn exchange(http: &Client, code: &str, p: &pkce::Pkce, redirect: &str) -> Result<Cred> {
+pub async fn exchange(http: &Client, code: &str, verifier: &str, redirect: &str) -> Result<Cred> {
     let form = [
         ("client_id", CLIENT_ID),
         ("client_secret", CLIENT_SECRET),
         ("code", code),
-        ("code_verifier", p.verifier.as_str()),
+        ("code_verifier", verifier),
         ("grant_type", "authorization_code"),
         ("redirect_uri", redirect),
     ];

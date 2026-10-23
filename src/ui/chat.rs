@@ -302,7 +302,7 @@ fn empty(app: &mut App, ui: &mut Ui) {
         ui.add_space(16.0);
         ui.label(RichText::new("Que construisons-nous aujourd'hui ?").font(theme::bold(28.0)).color(TEXT));
         ui.add_space(4.0);
-        let tagline = format!("Jev décide · {} exécute · tout reste local et anonyme", app.settings.engine.label());
+        let tagline = format!("Jev décide · {} exécute (effort {}) · tout reste local et anonyme", app.settings.engine.label(), app.settings.effort.get(app.settings.engine).label());
         ui.label(RichText::new(tagline).color(MUTED));
         ui.add_space(28.0);
     });

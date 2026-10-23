@@ -147,3 +147,35 @@ impl Settings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_old_settings_file_still_loads() {
+        let old = r#"
+engine = "deep_seek"
+kimi_url = "https://api.moonshot.cn/v1"
+kimi_key = ""
+compact_at = 120000
+max_steps = 24
+"#;
+        let s: Settings = toml::from_str(old).expect("rétrocompatible");
+        assert_eq!(s.engine, Engine::DeepSeek);
+        assert_eq!(s.claude_auth, AuthMode::Subscription, "les abonnements sont le défaut");
+        assert_eq!(s.gemini_model, "gemini-2.5-pro");
+        assert_eq!(s.effort.get(Engine::DeepSeek), Engine::DeepSeek.default_effort());
+        assert_eq!(s.claude_url, "https://api.anthropic.com");
+        let hand_edited: Settings = toml::from_str("engine = \"deepseek\"\n").expect("alias toléré");
+        assert_eq!(hand_edited.engine, Engine::DeepSeek);
+    }
+
+    #[test]
+    fn endpoint_and_auth_mode_follow_the_engine() {
+        let s = Settings::default();
+        assert_eq!(s.endpoint(Engine::Claude).0, "https://api.anthropic.com");
+        assert_eq!(s.auth_mode(Engine::Kimi), AuthMode::ApiKey);
+        assert_eq!(s.auth_mode(Engine::Gemini), AuthMode::Subscription);
+    }
+}

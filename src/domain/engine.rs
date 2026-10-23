@@ -74,6 +74,7 @@ impl Effort {
 pub enum Engine {
     #[default]
     Kimi,
+    #[serde(alias = "deepseek")]
     DeepSeek,
     Claude,
     Gemini,

@@ -21,6 +21,7 @@ Date : 2026-10-23 · Version : 0.2.0 · Périmètre : tout le diff depuis `7062c
 | 5 | Moyen | `audit_kit` écrivait dans le workspace sans passer par le flux d'approbation | approbation `Edit` quand « Valider chaque modification » est actif, comme les autres écritures |
 | 6 | Moyen | Premier message Gemini sans projet Code Assist (onboarding fait plus tard) → erreur au premier envoi | `gemini_connect` attache le projet dès la connexion ; `ping` le persiste ; `body()` relit le projet stocké |
 | 7 | Faible | `system: []` envoyé à Anthropic alors que le champ est optionnel ; certains comptes refusent un tableau vide | champ omis quand vide |
+| 8 | Faible | `Engine::DeepSeek` se sérialise `deep_seek` : un `settings.toml` édité à la main avec `deepseek` ne se chargeait plus | `#[serde(alias = "deepseek")]` + test de rétrocompatibilité du fichier v0.1.0 |
 
 ## Constats écartés (faux positifs vérifiés)
 
@@ -42,6 +43,6 @@ Date : 2026-10-23 · Version : 0.2.0 · Périmètre : tout le diff depuis `7062c
 ## Empreinte
 
 ```
-Omega-0.2.0-x64.msi  SHA256 EED09929D0E625E31D87126ABEEC0DF2F4F41A936EC808F335171CBEDE7D3E44
+Omega-0.2.0-x64.msi  SHA256 12B925D8C1E47F7658B3DFCECB3DB3995DEDF725D8938FE812B3684E8401B92B
 omega.exe            FileVersion 0.2.0
 ```

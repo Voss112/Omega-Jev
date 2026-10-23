@@ -94,7 +94,7 @@ async fn engine(env: &Env, engine: Engine) -> Result<String> {
     anyhow::ensure!(llm.configured(), "clé API absente ou URL non HTTPS");
     llm.ping().await?;
     let active = if engine == env.settings.engine { " · actif" } else { "" };
-    Ok(format!("{} · effort {}{active}", llm.model, engine.effort()))
+    Ok(format!("{} · effort {}{active}", llm.model, llm.effort.label()))
 }
 
 async fn jev(env: &Env) -> Result<String> {

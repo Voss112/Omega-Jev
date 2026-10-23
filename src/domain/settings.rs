@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::engine::Engine;
+use super::{
+    auth::AuthMode,
+    engine::{Efforts, Engine},
+};
 
 /// Output verbosity (caveman family). Shorter = fewer output tokens.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +63,16 @@ pub struct Settings {
     pub jev_key: String,
     pub jev_url: String,
     pub jev_model: String,
+    pub claude_key: String,
+    pub claude_url: String,
+    pub claude_model: String,
+    pub claude_auth: AuthMode,
+    pub gemini_key: String,
+    pub gemini_url: String,
+    pub gemini_model: String,
+    pub gemini_auth: AuthMode,
+    /// Effort chosen per engine (never by the router).
+    pub effort: Efforts,
     pub style: Style,
     pub max_steps: u32,
     pub auto_approve: bool,
@@ -90,6 +103,15 @@ impl Default for Settings {
             jev_key: String::new(),
             jev_url: "https://api.typesafe.ai/v1/systemone".into(),
             jev_model: "jev-latest".into(),
+            claude_key: String::new(),
+            claude_url: "https://api.anthropic.com".into(),
+            claude_model: "claude-sonnet-4-5".into(),
+            claude_auth: AuthMode::Subscription,
+            gemini_key: String::new(),
+            gemini_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
+            gemini_model: "gemini-2.5-pro".into(),
+            gemini_auth: AuthMode::Subscription,
+            effort: Efforts::default(),
             style: Style::default(),
             max_steps: 64,
             auto_approve: true,
@@ -111,6 +133,17 @@ impl Settings {
         match engine {
             Engine::Kimi => (&self.kimi_url, &self.kimi_key, &self.kimi_model),
             Engine::DeepSeek => (&self.deepseek_url, &self.deepseek_key, &self.deepseek_model),
+            Engine::Claude => (&self.claude_url, &self.claude_key, &self.claude_model),
+            Engine::Gemini => (&self.gemini_url, &self.gemini_key, &self.gemini_model),
+        }
+    }
+
+    /// Auth mode of `engine` (API keys are the only option for Kimi/DeepSeek).
+    pub fn auth_mode(&self, engine: Engine) -> AuthMode {
+        match engine {
+            Engine::Kimi | Engine::DeepSeek => AuthMode::ApiKey,
+            Engine::Claude => self.claude_auth,
+            Engine::Gemini => self.gemini_auth,
         }
     }
 }

@@ -1,5 +1,6 @@
 //! Pure domain model: no I/O, no framework.
 
+pub mod auth;
 pub mod chat;
 pub mod engine;
 pub mod playbook;

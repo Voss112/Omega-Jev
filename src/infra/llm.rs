@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::domain::{
     chat::{ToolCall, Usage},
-    engine::Engine,
+    engine::{Effort, Engine},
     settings::Settings,
 };
 
@@ -37,6 +37,7 @@ pub struct Llm {
     base: String,
     key: String,
     pub model: String,
+    pub effort: Effort,
 }
 
 impl Llm {
@@ -44,7 +45,14 @@ impl Llm {
     pub fn new(http: Client, settings: &Settings, engine: Engine) -> Self {
         let (base, key, model) = settings.endpoint(engine);
         let key = if key.trim().is_empty() { std::env::var(engine.key_var()).unwrap_or_default() } else { key.trim().to_owned() };
-        Self { http, engine, base: base.trim().trim_end_matches('/').into(), key, model: model.trim().into() }
+        Self {
+            http,
+            engine,
+            base: base.trim().trim_end_matches('/').into(),
+            key,
+            model: model.trim().into(),
+            effort: settings.effort.get(engine),
+        }
     }
 
     /// A key is set and will only travel over TLS.
@@ -59,14 +67,17 @@ impl Llm {
             "messages": messages,
             "stream": true,
             "stream_options": { "include_usage": true },
-            "reasoning_effort": self.engine.effort(),
         });
+        if let Some(e) = self.effort.openai() {
+            body["reasoning_effort"] = json!(e);
+        }
         match self.engine {
             Engine::Kimi => body["max_completion_tokens"] = json!(MAX_OUTPUT),
             Engine::DeepSeek => {
                 body["max_tokens"] = json!(MAX_OUTPUT);
                 body["thinking"] = json!({ "type": "enabled" });
             }
+            Engine::Claude | Engine::Gemini => {}
         }
         if let Some(tools) = tools {
             body["tools"] = tools;
@@ -273,12 +284,15 @@ mod tests {
     }
 
     #[test]
-    fn bodies_carry_each_engine_fixed_effort() {
-        let (http, settings) = (crate::infra::http::client("").unwrap(), Settings::default());
+    fn bodies_carry_the_selected_effort() {
+        let (http, mut settings) = (crate::infra::http::client("").unwrap(), Settings::default());
         let msg = [json!({ "role": "user", "content": "x" })];
+        settings.effort.set(Engine::Kimi, Effort::High);
         let kimi = Llm::new(http.clone(), &settings, Engine::Kimi).body(&msg, None);
-        assert_eq!((kimi["model"].as_str(), kimi["reasoning_effort"].as_str()), (Some("kimi-k3.1-pro"), Some("low")));
+        assert_eq!((kimi["model"].as_str(), kimi["reasoning_effort"].as_str()), (Some("kimi-k3.1-pro"), Some("high")));
         assert!(kimi.get("temperature").is_none() && kimi.get("thinking").is_none() && kimi.get("tools").is_none());
+        settings.effort.set(Engine::Kimi, Effort::Off);
+        assert!(Llm::new(http.clone(), &settings, Engine::Kimi).body(&msg, None).get("reasoning_effort").is_none());
         let ds = Llm::new(http, &settings, Engine::DeepSeek).body(&msg, None);
         assert_eq!((ds["model"].as_str(), ds["reasoning_effort"].as_str()), (Some("deepseek-flash"), Some("max")));
         assert_eq!(ds["thinking"]["type"], "enabled");

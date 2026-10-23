@@ -103,7 +103,7 @@ fn bypass_toggle(app: &mut App, ui: &mut Ui) {
 
 /// Engine switch; each engine keeps its own fixed effort (Kimi low, DeepSeek max).
 fn engine_picker(app: &mut App, ui: &mut Ui) {
-    let label = |e: Engine| format!("⚡ {} · effort {}", e.label(), e.effort());
+    let label = |e: Engine| format!("⚡ {} · effort {}", e.label(), app.settings.effort.get(e).label());
     let mut engine = app.settings.engine;
     ComboBox::from_id_salt("engine")
         .selected_text(RichText::new(label(engine)).size(12.5).color(MUTED))

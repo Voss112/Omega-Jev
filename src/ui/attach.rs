@@ -31,7 +31,19 @@ pub fn from_path(path: &Path) -> Result<Image, String> {
 /// Decodes, downscales to 1568 px and re-encodes; PNG for crisp text, JPEG when PNG stays too heavy.
 pub fn from_bytes(bytes: &[u8]) -> Result<Image, String> {
     let img = image::load_from_memory(bytes).map_err(|e| format!("image illisible : {e}"))?;
-    let img = downscale(img);
+    encode(downscale(img))
+}
+
+/// Clipboard image (Win+Shift+S screenshot ⇒ Ctrl+V here).
+pub fn from_clipboard() -> Option<Image> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let data = clipboard.get_image().ok()?;
+    let img = image::RgbaImage::from_raw(data.width as u32, data.height as u32, data.bytes.into_owned())?;
+    encode(downscale(DynamicImage::ImageRgba8(img))).ok()
+}
+
+/// PNG keeps text crisp; JPEG only when the PNG would blow past the provider limit.
+fn encode(img: DynamicImage) -> Result<Image, String> {
     let mut buf = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png).map_err(|e| format!("encodage PNG : {e}"))?;
     if buf.len() > MAX_BYTES {
@@ -40,21 +52,12 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Image, String> {
         DynamicImage::ImageRgba8(img.to_rgba8())
             .write_to(&mut cursor, ImageFormat::Jpeg)
             .map_err(|e| format!("encodage JPEG : {e}"))?;
+        if buf.len() > MAX_BYTES {
+            return Err("image trop lourde même après compression".into());
+        }
         return Ok(Image { media: "image/jpeg".into(), data: STANDARD.encode(&buf) });
     }
     Ok(Image { media: "image/png".into(), data: STANDARD.encode(&buf) })
-}
-
-/// Clipboard image (Win+Shift+S screenshot ⇒ Ctrl+V here).
-pub fn from_clipboard() -> Option<Image> {
-    let mut clipboard = arboard::Clipboard::new().ok()?;
-    let data = clipboard.get_image().ok()?;
-    let img = image::RgbaImage::from_raw(data.width as u32, data.height as u32, data.bytes.into_owned())?;
-    let mut buf = Vec::new();
-    DynamicImage::ImageRgba8(downscale(DynamicImage::ImageRgba8(img)).to_rgba8())
-        .write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png)
-        .ok()?;
-    Some(Image { media: "image/png".into(), data: STANDARD.encode(&buf) })
 }
 /// Bytes of image files dropped on the window during this frame.
 pub fn dropped(ctx: &Context) -> Vec<Result<Vec<u8>, String>> {

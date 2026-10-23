@@ -249,7 +249,7 @@ pub fn viewer(app: &mut App, ui: &mut Ui) {
         .inner_margin(Margin::same(10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.set_height(ui.available_height() - 12.0);
+            ui.set_height((ui.available_height() - 12.0).max(120.0));
             ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                 ui.add(Label::new(RichText::new(text).monospace().size(12.0).color(TEXT)).wrap_mode(TextWrapMode::Extend));
             });

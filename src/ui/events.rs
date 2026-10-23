@@ -66,6 +66,8 @@ impl App {
                         self.errors.insert(conv, e);
                     }
                     self.save(conv);
+                    // The turn may have written files: the tree must re-read the disk.
+                    self.files.invalidate();
                 }
                 Event::Health(h) => self.health = h,
                 Event::Vpn(v) => self.vpn = Some(v),

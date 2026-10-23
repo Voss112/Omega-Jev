@@ -5,6 +5,7 @@ mod cards;
 mod chat;
 mod composer;
 mod events;
+mod files;
 mod login;
 mod panel;
 mod settings;
@@ -84,6 +85,8 @@ pub struct App {
     /// In-flight OAuth dance, if any.
     login: Option<crate::app::login::Login>,
     login_task: Option<JoinHandle<()>>,
+    /// Long-lived Claude token typed by the user (`claude setup-token`).
+    token_draft: String,
     /// Last fetched plan usage of a subscription.
     plan_usage: Option<(Provider, Vec<Window>, Instant)>,
     show_panel: bool,
@@ -92,6 +95,8 @@ pub struct App {
     md: CommonMarkCache,
     /// Rendered (width, height, message timestamp) per (conversation, index) for off-screen skipping.
     heights: HashMap<(Uuid, usize), (f32, f32, i64)>,
+    /// Explorer, open tabs and the read-only viewer.
+    files: files::Files,
 }
 
 impl App {
@@ -127,12 +132,14 @@ impl App {
             settings_draft: None,
             login: None,
             login_task: None,
+            token_draft: String::new(),
             plan_usage: None,
             show_panel: true,
             focus_composer: true,
             notice: None,
             md: CommonMarkCache::default(),
             heights: HashMap::new(),
+            files: files::Files::default(),
         };
         if let Some(n) = notice {
             app.notify(n);
@@ -233,6 +240,14 @@ impl eframe::App for App {
             .show_separator_line(false)
             .frame(Frame::new().fill(theme::SIDEBAR).inner_margin(Margin::symmetric(14, 0)))
             .show(ui, |ui| sidebar::show(self, ui));
+        if self.files.show {
+            Panel::left("files")
+                .exact_size(250.0)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(Frame::new().fill(theme::SIDEBAR).inner_margin(Margin::symmetric(12, 0)))
+                .show(ui, |ui| files::panel(self, ui));
+        }
         if self.show_panel {
             Panel::right("tools")
                 .exact_size(292.0)
@@ -247,7 +262,13 @@ impl eframe::App for App {
             .show(ui, |ui| composer::show(self, ui));
         CentralPanel::default()
             .frame(Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(24, 0)))
-            .show(ui, |ui| chat::show(self, ui));
+            .show(ui, |ui| {
+                if files::tabs(self, ui) {
+                    files::viewer(self, ui);
+                } else {
+                    chat::show(self, ui);
+                }
+            });
         settings::show(self, &ctx);
         login::show(self, &ctx);
     }

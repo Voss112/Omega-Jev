@@ -26,6 +26,7 @@ enum Action {
 enum SubAction {
     Connect(Provider),
     Import,
+    UseToken,
 }
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
@@ -43,7 +44,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             );
             ui.add_space(12.0);
             ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.55).show(ui, |ui| {
-                sub = form(ui, draft);
+                sub = form(ui, draft, &mut app.token_draft);
             });
             ui.add_space(10.0);
             ui.label(RichText::new(format!("Données locales : {}", paths::root().display())).size(11.5).color(FAINT));
@@ -77,11 +78,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     match sub {
         Some(SubAction::Connect(provider)) => app.connect(provider),
         Some(SubAction::Import) => app.import_claude(),
+        Some(SubAction::UseToken) => app.use_token(),
         None => {}
     }
 }
 
-fn form(ui: &mut Ui, s: &mut Settings) -> Option<SubAction> {
+fn form(ui: &mut Ui, s: &mut Settings, token: &mut String) -> Option<SubAction> {
     let mut sub = None;
     section(ui, "Abonnements");
     ui.label(
@@ -110,6 +112,21 @@ fn form(ui: &mut Ui, s: &mut Settings) -> Option<SubAction> {
                 }
             });
             ui.end_row();
+            if provider == Provider::Claude {
+                ui.label(label("Jeton longue durée"));
+                ui.horizontal(|ui| {
+                    ui.add(
+                        TextEdit::singleline(token)
+                            .hint_text("sk-ant-oat… (claude setup-token) — évite l'échange OAuth limité")
+                            .password(true)
+                            .desired_width(300.0),
+                    );
+                    if widgets::ghost(ui, "Utiliser").clicked() && !token.trim().is_empty() {
+                        sub = Some(SubAction::UseToken);
+                    }
+                });
+                ui.end_row();
+            }
             ui.label(label("Mode"));
             let mut mode = match provider {
                 Provider::Claude => s.claude_auth,

@@ -1,13 +1,13 @@
 //! Right panel: live tool health (green/red), network privacy, session economy, last Jev verdict.
 
-use eframe::egui::{Align, Layout, ProgressBar, RichText, ScrollArea, Spinner, Ui};
+use eframe::egui::{Align, Color32, Layout, ProgressBar, RichText, ScrollArea, Spinner, Ui};
 
 use super::{
     App,
     theme::{self, ACCENT, AMBER, BORDER, CYAN, FAINT, GREEN, MUTED, RED, SOFT, TEXT},
     widgets,
 };
-use crate::{app::health, domain::route::Route};
+use crate::app::health;
 
 pub fn show(app: &mut App, ui: &mut Ui) {
     ui.add_space(18.0);
@@ -176,40 +176,98 @@ fn subscription(app: &App, ui: &mut Ui) {
     });
 }
 
-fn verdict(app: &App, ui: &mut Ui) {    let Some(route) = app.current_conv().and_then(|c| c.messages.iter().rev().find_map(|m| m.route.as_ref())) else { return };
+fn verdict(app: &App, ui: &mut Ui) {
     ui.add_space(10.0);
     widgets::section(ui, "Dernier verdict Jev");
     ui.add_space(4.0);
+    let Some(route) = app.current_conv().and_then(|c| c.messages.iter().rev().find_map(|m| m.route.as_ref())) else {
+        widgets::card(ui, BORDER, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new("Aucun routage pour l'instant").size(12.5).color(SOFT));
+            ui.label(RichText::new("Jev se prononce au premier message envoyé.").size(11.0).color(FAINT));
+        });
+        return;
+    };
     widgets::card(ui, BORDER, |ui| {
         ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(route.skill.label()).font(theme::bold(15.0)).color(TEXT));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let (label, color) = match route.source {
+                    crate::domain::route::Source::Jev => ("⚡ Jev", CYAN),
+                    crate::domain::route::Source::Local => ("◌ local", MUTED),
+                };
+                widgets::chip(ui, label, color);
+            });
+        });
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("confiance").size(11.0).color(FAINT));
+            ui.label(RichText::new(format!("{:.0} %", route.confidence * 100.0)).size(11.5).monospace().color(TEXT));
+            if route.risky() {
+                widgets::chip(ui, "🛡 revue sécurité", RED);
+            }
+        });
+        ui.add_space(8.0);
+        let tools = app.current_conv().map_or(0, |c| c.toolset.len());
+        ui.columns(2, |cols| {
+            let left = &mut cols[0];
+            stat(left, "Code", route.code, ACCENT);
+            left.add_space(6.0);
+            stat(left, "Risque", route.risk, RED);
+            left.add_space(6.0);
+            stat(left, "Apps", route.apps, GREEN);
+            let right = &mut cols[1];
+            stat(right, "Web", route.web, CYAN);
+            right.add_space(6.0);
+            stat(right, "Impact", route.blast, AMBER);
+            right.add_space(6.0);
+            stat_count(right, "Outils", tools);
+        });
+        ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
-            widgets::chip(ui, route.skill.label(), ACCENT);
-            widgets::chip(ui, format!("{:?}", route.source), CYAN);
             if let Some(p) = &route.playbook {
                 widgets::chip(ui, format!("📘 {p}"), GREEN);
             }
+            if route.needs_web() {
+                widgets::chip(ui, "🌐 web", CYAN);
+            }
+            if route.needs_apps() {
+                widgets::chip(ui, "🧩 apps", GREEN);
+            }
         });
-        ui.add_space(4.0);
-        bars(ui, route);
     });
 }
 
-fn bars(ui: &mut Ui, r: &Route) {
-    for (label, value, color) in [
-        ("Web", r.web, CYAN),
-        ("Code", r.code, ACCENT),
-        ("Risque", r.risk, RED),
-        ("Impact", r.blast, AMBER),
-        ("Apps", r.apps, GREEN),
-    ] {
-        ui.horizontal(|ui| {
-            ui.add_sized([56.0, 16.0], eframe::egui::Label::new(RichText::new(label).size(11.5).color(MUTED)));
-            ui.add(
-                ProgressBar::new(value)
-                    .desired_height(6.0)
-                    .fill(color)
-                    .text(RichText::new(format!("{:.0} %", value * 100.0)).size(10.5)),
-            );
+/// Label, value and a 3 px bar — readable in a 292 px panel.
+fn stat(ui: &mut Ui, label: &str, value: f32, color: Color32) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(10.5).color(FAINT));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let text = if value > 0.0 { format!("{:.0} %", value * 100.0) } else { "—".to_owned() };
+            ui.label(RichText::new(text).size(11.0).monospace().color(if value > 0.0 { color } else { FAINT }));
         });
+    });
+    bar(ui, value, color);
+}
+
+fn stat_count(ui: &mut Ui, label: &str, count: usize) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(10.5).color(FAINT));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(RichText::new(count.to_string()).size(11.0).monospace().color(TEXT));
+        });
+    });
+    bar(ui, (count as f32 / 8.0).min(1.0), MUTED);
+}
+
+fn bar(ui: &mut Ui, value: f32, color: Color32) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(eframe::egui::vec2(width, 3.0), eframe::egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 2.0, BORDER);
+    if value > 0.0 {
+        let filled = eframe::egui::Rect::from_min_size(rect.min, eframe::egui::vec2(width * value.clamp(0.0, 1.0), 3.0));
+        p.rect_filled(filled, 2.0, color);
     }
 }

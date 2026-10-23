@@ -85,18 +85,27 @@ async fn email(http: &Client, access: &str) -> Option<String> {
     v["email"].as_str().map(str::to_owned)
 }
 
+/// Fields the Code Assist backend expects from an IDE plugin.
+fn metadata() -> Value {
+    json!({ "pluginType": "GEMINI", "ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED" })
+}
+
 /// `(tier id, Code Assist project)`: `loadCodeAssist`, then `onboardUser` when no project is attached.
 pub async fn tier(http: &Client, access: &str, project: &str) -> Result<(String, String)> {
-    let probe = json!({ "cloudaicompanionProject": project, "metadata": { "pluginType": "GEMINI" } });
-    let v = post(http, access, "loadCodeAssist", &probe).await?;
+    // An empty `cloudaicompanionProject` is read as an unlicensed project: omit it until one is known.
+    let mut probe = json!({ "metadata": metadata() });
+    if !project.is_empty() {
+        probe["cloudaicompanionProject"] = json!(project);
+    }
+    let v = post(http, access, "loadCodeAssist", &probe).await.map_err(license_hint)?;
     if let Some((tier, found)) = tier_of(&v)
         && !found.is_empty()
     {
         return Ok((tier, found));
     }
     let tier_id = v["currentTier"]["id"].as_str().unwrap_or("free-tier").to_owned();
-    let onboard = json!({ "tierId": tier_id, "metadata": { "pluginType": "GEMINI" } });
-    let op = post(http, access, "onboardUser", &onboard).await?;
+    let onboard = json!({ "tierId": tier_id, "metadata": metadata() });
+    let op = post(http, access, "onboardUser", &onboard).await.map_err(license_hint)?;
     let Some(name) = op["name"].as_str().filter(|n| !n.is_empty()) else {
         return Ok((tier_id, String::new()));
     };
@@ -119,6 +128,18 @@ pub async fn tier(http: &Client, access: &str, project: &str) -> Result<(String,
     Ok((tier_id, String::new()))
 }
 
+/// #3501: the Google account has no Gemini Code Assist licence — say what to do instead of quoting the API.
+fn license_hint(err: anyhow::Error) -> anyhow::Error {
+    let text = format!("{err:#}");
+    if text.contains("3501") || text.contains("valid license") {
+        return anyhow::anyhow!(
+            "Compte Google sans licence Gemini Code Assist (403 #3501). Activez Code Assist sur ce compte \
+             (codeassist.google.com), puis reconnectez-vous — ou passez Gemini en « Clé API » dans ⚙ Paramètres."
+        );
+    }
+    err
+}
+
 pub fn tier_of(v: &Value) -> Option<(String, String)> {
     let tier = v["currentTier"]["id"].as_str()?.to_owned();
     Some((tier, v["cloudaicompanionProject"].as_str().unwrap_or_default().to_owned()))
@@ -128,6 +149,7 @@ async fn post(http: &Client, access: &str, method: &str, body: &Value) -> Result
     let res = http
         .post(format!("{CODE_ASSIST}:{method}"))
         .bearer_auth(access)
+        .header("user-agent", "GeminiCLI/0.20.0 (win32; x64)")
         .json(body)
         .timeout(Duration::from_secs(30))
         .send()
@@ -182,5 +204,19 @@ mod tests {
         let v = json!({ "currentTier": { "id": "standard" }, "cloudaicompanionProject": "proj-9" });
         assert_eq!(tier_of(&v), Some(("standard".to_owned(), "proj-9".to_owned())));
         assert!(tier_of(&json!({})).is_none());
+    }
+
+    #[test]
+    fn a_missing_licence_becomes_an_actionable_message() {
+        let err = license_hint(anyhow::anyhow!("Code Assist loadCodeAssist 403 Forbidden : (#3501) you do not have a valid license"));
+        assert!(format!("{err:#}").contains("Clé API"));
+        let other = license_hint(anyhow::anyhow!("timeout"));
+        assert!(format!("{other:#}").contains("timeout"));
+    }
+
+    #[test]
+    fn code_assist_metadata_names_the_ide_plugin() {
+        let m = metadata();
+        assert_eq!((m["pluginType"].as_str(), m["ideType"].as_str()), (Some("GEMINI"), Some("IDE_UNSPECIFIED")));
     }
 }

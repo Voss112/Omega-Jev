@@ -108,7 +108,8 @@ impl Llm {
         };
         let token = self.authorization().await?;
         let req = self.http.get(&url).timeout(Duration::from_secs(10));
-        let req = if self.engine.wire() == Wire::Anthropic { anthropic_headers(req, &token, oauth) } else { req.bearer_auth(&token) };
+        let req =
+            if self.engine.wire() == Wire::Anthropic { anthropic_headers(req, &token, oauth) } else { req.bearer_auth(&token) };
         let res = req.send().await.with_context(|| format!("{} injoignable", self.engine.label()))?;
         if !res.status().is_success() {
             bail!("HTTP {}", res.status());
@@ -268,11 +269,7 @@ pub fn error_text(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| {
-            v["error"]["message"]
-                .as_str()
-                .or_else(|| v["error"].as_str())
-                .or_else(|| v["message"].as_str())
-                .map(str::to_owned)
+            v["error"]["message"].as_str().or_else(|| v["error"].as_str()).or_else(|| v["message"].as_str()).map(str::to_owned)
         })
         .unwrap_or_else(|| body.chars().take(300).collect())
 }
@@ -297,17 +294,17 @@ mod tests {
     }
 
     #[test]
-    fn subscription_mode_does_not_need_an_api_key() {
-        let (http, mut s) = (crate::infra::http::client("").unwrap(), Settings::default());
-        s.kimi_key = "sk-x".into();
-        assert!(Llm::new(http.clone(), &s, Engine::Kimi).configured());
-        // Claude/Gemini in subscription mode with no credential file: not configured, no panic.
-        s.claude_key.clear();
-        s.gemini_key.clear();
-        for engine in [Engine::Claude, Engine::Gemini] {
+    fn api_key_mode_without_a_key_is_not_configured() {
+        let http = crate::infra::http::client("").unwrap();
+        for (engine, mode) in [(Engine::Claude, AuthMode::ApiKey), (Engine::Gemini, AuthMode::ApiKey)] {
+            let s = match engine {
+                Engine::Claude => Settings { claude_auth: mode, claude_key: String::new(), ..Settings::default() },
+                _ => Settings { gemini_auth: mode, gemini_key: String::new(), ..Settings::default() },
+            };
             let llm = Llm::new(http.clone(), &s, engine);
-            assert!(!llm.subscription(), "{engine:?} should have no stored credential");
-            assert!(!llm.configured());
+            // Subscription credentials on disk must not be mistaken for an API key.
+            assert!(!llm.subscription(), "{engine:?}");
+            assert!(!llm.configured(), "{engine:?} sans clé");
         }
     }
 

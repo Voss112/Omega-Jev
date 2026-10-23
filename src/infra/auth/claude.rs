@@ -64,29 +64,64 @@ pub async fn refresh(http: &Client, cred: &Cred) -> Result<Cred> {
 }
 
 async fn token(http: &Client, body: &Value) -> Result<Cred> {
-    let res = http
-        .post(TOKEN)
-        .header("content-type", "application/json")
-        .json(body)
-        .timeout(std::time::Duration::from_secs(20))
-        .send()
-        .await
-        .context("connexion au serveur de jetons Claude")?;
-    let status = res.status();
-    let text = res.text().await.unwrap_or_default();
-    if !status.is_success() {
-        anyhow::bail!("Claude {status} : {}", oauth_error(&text));
+    let mut attempt = 0;
+    loop {
+        let res = http
+            .post(TOKEN)
+            .header("content-type", "application/json")
+            .json(body)
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await
+            .context("connexion au serveur de jetons Claude")?;
+        let status = res.status();
+        // The endpoint rate-limits per IP: one short wait is worth it, a loop is not.
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt == 0 {
+            attempt = 1;
+            let wait = res
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(3)
+                .clamp(1, 10);
+            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            continue;
+        }
+        let text = res.text().await.unwrap_or_default();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                anyhow::bail!(
+                    "Anthropic limite l'échange de jetons depuis cette connexion (429). Réessayez dans une minute, \
+                     importez la session Claude Code, ou collez un jeton d'abonnement (sk-ant-oat…)."
+                );
+            }
+            anyhow::bail!("Claude {status} : {}", oauth_error(&text));
+        }
+        let v: Value = serde_json::from_str(&text).context("réponse de jeton illisible")?;
+        let access = v["access_token"].as_str().unwrap_or_default().to_owned();
+        anyhow::ensure!(!access.is_empty(), "réponse de jeton sans access_token");
+        let expires_in = v["expires_in"].as_u64().unwrap_or(3600);
+        return Ok(Cred {
+            access,
+            refresh: v["refresh_token"].as_str().unwrap_or_default().to_owned(),
+            expires_at: chrono::Utc::now().timestamp() + i64::try_from(expires_in).unwrap_or(3600),
+            account: v["subscriptionType"].as_str().unwrap_or("claude").to_owned(),
+            project: String::new(),
+        });
     }
-    let v: Value = serde_json::from_str(&text).context("réponse de jeton illisible")?;
-    let access = v["access_token"].as_str().unwrap_or_default().to_owned();
-    anyhow::ensure!(!access.is_empty(), "réponse de jeton sans access_token");
-    let expires_in = v["expires_in"].as_u64().unwrap_or(3600);
+}
+
+/// A long-lived subscription token (`claude setup-token` → `sk-ant-oat01-…`): no exchange, no IP rate limit.
+pub fn import_token(token: &str) -> Result<Cred> {
+    let token = token.trim();
+    anyhow::ensure!(!token.is_empty(), "jeton vide");
+    anyhow::ensure!(token.starts_with("sk-ant-oat"), "jeton attendu : sk-ant-oat… (claude setup-token)");
     Ok(Cred {
-        access,
-        refresh: v["refresh_token"].as_str().unwrap_or_default().to_owned(),
-        expires_at: chrono::Utc::now().timestamp() + i64::try_from(expires_in).unwrap_or(3600),
-        account: v["subscriptionType"].as_str().unwrap_or("claude").to_owned(),
-        project: String::new(),
+        access: token.to_owned(),
+        expires_at: chrono::Utc::now().timestamp() + 300 * 24 * 3600,
+        account: "jeton d'abonnement".to_owned(),
+        ..Cred::default()
     })
 }
 
@@ -165,6 +200,15 @@ mod tests {
     fn pasted_code_may_carry_its_state() {
         assert_eq!(split_code("abc#def"), ("abc".into(), "def".into()));
         assert_eq!(split_code(" abc \n"), ("abc".into(), String::new()));
+    }
+
+    #[test]
+    fn a_long_lived_token_is_accepted_without_exchange() {
+        let cred = import_token("  sk-ant-oat01-abc  ").unwrap();
+        assert_eq!((cred.access.as_str(), cred.refresh.as_str()), ("sk-ant-oat01-abc", ""));
+        assert!(cred.expires_at > chrono::Utc::now().timestamp() + 200 * 24 * 3600);
+        assert!(import_token("sk-ant-api03-x").is_err(), "clé API : mauvais mode");
+        assert!(import_token("  ").is_err());
     }
 
     #[test]

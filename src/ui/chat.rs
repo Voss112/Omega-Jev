@@ -10,7 +10,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use uuid::Uuid;
 
 use super::{
-    App, Live, cards,
+    App, Live, cards, files,
     theme::{self, ACCENT, AMBER, BORDER, BUBBLE, CARD, CYAN, GREEN, HOVER, MUTED, RAISED, RED, TEXT},
     widgets,
 };
@@ -76,6 +76,10 @@ fn top_bar(app: &mut App, ui: &mut Ui) {
             let icon = if app.show_panel { "⏵ Outils" } else { "⏴ Outils" };
             if widgets::ghost(ui, icon).on_hover_text("Afficher/masquer le panneau des outils").clicked() {
                 app.show_panel = !app.show_panel;
+            }
+            let files_icon = if app.files.show { "📁 Fichiers ✓" } else { "📁 Fichiers" };
+            if widgets::ghost(ui, files_icon).on_hover_text("Arborescence du dossier de travail").clicked() {
+                files::toggle(app);
             }
             if let Some(id) = app.current.filter(|id| app.conv(*id).is_some_and(|c| !c.messages.is_empty()))
                 && widgets::ghost(ui, "⇩ Exporter").on_hover_text("Exporter la discussion en Markdown").clicked()

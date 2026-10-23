@@ -233,6 +233,13 @@ impl App {
         self.connected(Provider::Claude, result.map_err(|e| format!("{e:#}")));
     }
 
+    /// Long-lived `sk-ant-oat…` token typed in the settings: no OAuth exchange, no rate limit.
+    pub(super) fn use_token(&mut self) {
+        let token = std::mem::take(&mut self.token_draft);
+        let result = crate::infra::auth::claude::import_token(&token).map_err(|e| format!("{e:#}"));
+        self.connected(Provider::Claude, result);
+    }
+
     /// Persists fresh credentials, switches the provider to subscription mode and selects it.
     pub(super) fn connected(&mut self, provider: Provider, result: Result<Cred, String>) {
         match result {

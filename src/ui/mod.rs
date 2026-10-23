@@ -1,6 +1,7 @@
 //! egui front-end: owns conversations, bridges UI ↔ tokio runtime through events.
 
 mod actions;
+mod attach;
 mod cards;
 mod chat;
 mod composer;
@@ -44,7 +45,7 @@ pub fn run() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Omega")
             .with_inner_size([1360.0, 860.0])
-            .with_min_inner_size([980.0, 640.0])
+            .with_min_inner_size([1180.0, 700.0])
             .with_icon(Arc::new(theme::icon())),
         centered: true,
         ..Default::default()
@@ -102,6 +103,10 @@ pub struct App {
     jobs: Vec<crate::domain::schedule::Job>,
     schedule_draft: Option<schedule::Draft>,
     schedule_error: Option<String>,
+    /// Screenshots waiting in the composer.
+    shots: Vec<crate::domain::chat::Image>,
+    /// Decoded thumbnails, keyed by image hash.
+    tex: HashMap<u64, egui::TextureHandle>,
 }
 
 impl App {
@@ -148,6 +153,8 @@ impl App {
             jobs: store::load_jobs(),
             schedule_draft: None,
             schedule_error: None,
+            shots: Vec::new(),
+            tex: HashMap::new(),
         };
         if let Some(n) = notice {
             app.notify(n);

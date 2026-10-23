@@ -243,6 +243,11 @@ impl Llm {
                     let models = self.models().await.map_or_else(|_| "?".to_owned(), |m| m.join(", "));
                     bail!("{} 404: {} — modèles accessibles avec cette clé : {models}", self.engine.label(), error_text(&text));
                 }
+                if self.engine.wire() == Wire::Gemini
+                    && let Some(hint) = gemini_auth::hint(&text)
+                {
+                    bail!("{} {status}: {hint}", self.engine.label());
+                }
                 bail!("{} {status}: {}", self.engine.label(), error_text(&text));
             }
             tokio::time::sleep(Duration::from_millis(900 * u64::from(attempt))).await;

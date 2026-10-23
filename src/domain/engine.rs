@@ -122,6 +122,11 @@ impl Engine {
     pub fn subscription_capable(self) -> bool {
         matches!(self, Self::Claude | Self::Gemini)
     }
+
+    /// Multimodal input (screenshots). Kimi/DeepSeek text models do not accept images.
+    pub fn vision(self) -> bool {
+        matches!(self, Self::Claude | Self::Gemini)
+    }
 }
 
 /// One effort per engine, so switching engine never loses the user's choice.

@@ -22,9 +22,20 @@ pub struct ToolCall {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Image {
+    /// `image/png`, `image/jpeg`…
+    pub media: String,
+    /// Base64 of the original bytes (resized client-side before storing).
+    pub data: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: String,
+    /// Screenshots shown to the model (only vision engines receive them).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Image>,
     /// Hidden orchestrator context sent before `content`; stored so the wire prefix stays cache-stable.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub preamble: String,
@@ -50,6 +61,7 @@ impl Message {
         Self {
             role,
             content,
+            images: Vec::new(),
             preamble: String::new(),
             reasoning: String::new(),
             tool_calls: Vec::new(),
@@ -63,6 +75,11 @@ impl Message {
 
     pub fn user(content: String) -> Self {
         Self::new(Role::User, content)
+    }
+
+    /// User message carrying screenshots; text may be empty.
+    pub fn user_with(content: String, images: Vec<Image>) -> Self {
+        Self { images, ..Self::new(Role::User, content) }
     }
 
     pub fn assistant(content: String, reasoning: String, tool_calls: Vec<ToolCall>) -> Self {
@@ -154,7 +171,7 @@ impl Default for Conversation {
 impl Conversation {
     pub fn push(&mut self, msg: Message) {
         if self.messages.is_empty() && msg.role == Role::User {
-            self.title = title_of(&msg.content);
+            self.title = title_of(if msg.content.trim().is_empty() { "Image" } else { &msg.content });
         }
         self.updated = Utc::now();
         self.messages.push(msg);

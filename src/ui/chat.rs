@@ -10,7 +10,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use uuid::Uuid;
 
 use super::{
-    App, Live, cards, files,
+    App, Live, attach, cards, files,
     theme::{self, ACCENT, AMBER, BORDER, BUBBLE, CARD, CYAN, GREEN, HOVER, MUTED, RAISED, RED, TEXT},
     widgets,
 };
@@ -105,7 +105,7 @@ fn top_bar(app: &mut App, ui: &mut Ui) {
 }
 
 fn body(app: &mut App, id: Uuid, ui: &mut Ui) -> Option<Action> {
-    let App { convs, live, md, approvals, errors, heights, .. } = app;
+    let App { convs, live, md, approvals, errors, heights, tex, .. } = app;
     let conv = convs.iter().find(|c| c.id == id)?;
     let busy = live.contains_key(&id);
     heights.retain(|(c, _), _| *c == id);
@@ -128,7 +128,7 @@ fn body(app: &mut App, id: Uuid, ui: &mut Ui) -> Option<Action> {
         }
         let top = ui.cursor().top();
         let clicked = match m.role {
-            Role::User => user(ui, i, m, busy),
+            Role::User => user(ui, i, m, busy, tex),
             Role::Assistant => assistant(ui, md, i, m, &results, first, !busy && last_answer == Some(i)),
             Role::Tool => None,
         };
@@ -152,12 +152,19 @@ fn body(app: &mut App, id: Uuid, ui: &mut Ui) -> Option<Action> {
     action
 }
 
-fn user(ui: &mut Ui, i: usize, m: &Message, busy: bool) -> Option<Action> {
+fn user(
+    ui: &mut Ui,
+    i: usize,
+    m: &Message,
+    busy: bool,
+    tex: &mut HashMap<u64, eframe::egui::TextureHandle>,
+) -> Option<Action> {
     const PAD: f32 = 28.0;
     ui.add_space(8.0);
     let text = RichText::new(&m.content).size(14.5).color(TEXT);
     let wrap = ui.available_width() * 0.8 - PAD;
-    let width = ui.painter().layout(m.content.clone(), FontId::proportional(14.5), TEXT, wrap).size().x.ceil() + PAD;
+    let text_w = if m.content.trim().is_empty() { 0.0 } else { ui.painter().layout(m.content.clone(), FontId::proportional(14.5), TEXT, wrap).size().x.ceil() };
+    let width = (text_w.max(if m.images.is_empty() { 0.0 } else { 230.0 }) + PAD).min(ui.available_width() * 0.85);
     ui.horizontal_top(|ui| {
         ui.add_space((ui.available_width() - width).max(0.0));
         Frame::new()
@@ -166,7 +173,17 @@ fn user(ui: &mut Ui, i: usize, m: &Message, busy: bool) -> Option<Action> {
             .inner_margin(Margin::symmetric(14, 10))
             .show(ui, |ui| {
                 ui.set_max_width(width - PAD);
-                ui.add(Label::new(text).wrap().selectable(true));
+                if !m.content.trim().is_empty() {
+                    ui.add(Label::new(text).wrap().selectable(true));
+                }
+                if !m.images.is_empty() {
+                    let ctx = ui.ctx().clone();
+                    ui.horizontal_wrapped(|ui| {
+                        for img in &m.images {
+                            attach::thumb(ui, &ctx, tex, img, 150.0, false);
+                        }
+                    });
+                }
             });
     });
     ui.add_space(4.0);

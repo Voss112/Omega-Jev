@@ -4,7 +4,7 @@ use std::{fmt::Write as _, time::Duration};
 
 use uuid::Uuid;
 
-use super::{App, Live, build_env};
+use super::{App, Live, attach, build_env};
 use crate::{
     app::{Event, agent, health, prompts},
     domain::{
@@ -42,12 +42,19 @@ impl App {
 
     pub(super) fn send(&mut self) {
         let text = self.draft.trim().to_owned();
-        if text.is_empty() || self.busy() {
+        if (text.is_empty() && self.shots.is_empty()) || self.busy() {
             return;
         }
         if self.settings.require_vpn && !self.vpn.as_ref().is_some_and(|v| v.active) {
             self.notify("Kill-switch VPN : aucun VPN détecté, envoi bloqué.");
             return;
+        }
+        let images = std::mem::take(&mut self.shots);
+        if !images.is_empty() && !self.settings.engine.vision() {
+            self.notify(format!(
+                "{} ne lit pas les images : elles restent locales (utilisez Claude ou Gemini pour les montrer).",
+                self.settings.engine.label()
+            ));
         }
         let id = if let Some(id) = self.current {
             id
@@ -66,7 +73,7 @@ impl App {
         }
         let Some(conv) = self.conv_mut(id) else { return };
         conv.repair();
-        conv.push(Message::user(text));
+        conv.push(if images.is_empty() { Message::user(text) } else { Message::user_with(text, images) });
         self.draft.clear();
         self.launch(id);
     }
@@ -316,6 +323,33 @@ impl App {
         self.health.clear();
         let (env, emit) = (self.env.clone(), self.emit.clone());
         self.spawn(async move { emit.send(Event::Health(health::check(&env).await)) });
+    }
+
+    /// Adds a screenshot to the composer, with a hard cap.
+    pub(super) fn attach(&mut self, img: crate::domain::chat::Image) {
+        if self.shots.len() >= attach::MAX_IMAGES {
+            self.notify(format!("{} images maximum par message", attach::MAX_IMAGES));
+            return;
+        }
+        self.shots.push(img);
+    }
+
+    /// Files dropped on the window or pasted from the clipboard.
+    pub(super) fn collect_images(&mut self, ctx: &eframe::egui::Context) {
+        if self.settings_draft.is_some() || self.login.is_some() || self.schedule_draft.is_some() {
+            return;
+        }
+        for bytes in attach::dropped(ctx) {
+            match attach::from_bytes(&bytes) {
+                Ok(img) => self.attach(img),
+                Err(e) => self.notify(e),
+            }
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(eframe::egui::Key::V))
+            && let Some(img) = attach::from_clipboard()
+        {
+            self.attach(img);
+        }
     }
 
     pub(super) fn restart_background(&mut self) {

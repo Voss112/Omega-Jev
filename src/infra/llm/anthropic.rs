@@ -56,7 +56,7 @@ pub fn body(messages: &[Value], tools: Option<Value>, model: &str, effort: Effor
             }
             _ => {
                 flush(&mut out, &mut results);
-                out.push(json!({ "role": "user", "content": [{ "type": "text", "text": m["content"].as_str().unwrap_or_default() }] }));
+                out.push(json!({ "role": "user", "content": user_blocks(&m["content"]) }));
             }
         }
     }
@@ -106,6 +106,28 @@ fn flush(out: &mut Vec<Value>, results: &mut Vec<Value>) {
     if !results.is_empty() {
         out.push(json!({ "role": "user", "content": std::mem::take(results) }));
     }
+}
+
+/// Canonical (OpenAI-shaped) user content → Anthropic blocks; `data:` URLs become base64 images.
+fn user_blocks(content: &Value) -> Vec<Value> {
+    let Some(parts) = content.as_array() else {
+        return vec![json!({ "type": "text", "text": content.as_str().unwrap_or_default() })];
+    };
+    parts
+        .iter()
+        .filter_map(|p| match p["type"].as_str().unwrap_or_default() {
+            "text" => Some(json!({ "type": "text", "text": p["text"].as_str().unwrap_or_default() })),
+            "image_url" => {
+                let (media, data) = data_url(p["image_url"]["url"].as_str()?)?;
+                Some(json!({ "type": "image", "source": { "type": "base64", "media_type": media, "data": data } }))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn data_url(url: &str) -> Option<(&str, &str)> {
+    url.strip_prefix("data:")?.split_once(";base64,")
 }
 
 /// Empty or malformed arguments become `{}` so the tool can report a missing argument instead of crashing.
@@ -240,6 +262,19 @@ mod tests {
         let b = body(&msgs, None, "m", Effort::Off, false);
         assert_eq!(b["messages"][0]["role"], "user");
         assert_eq!(b["messages"][0]["content"][0]["text"], "ERROR");
+    }
+
+    #[test]
+    fn a_data_url_becomes_a_base64_image_block() {
+        let msgs = vec![json!({ "role": "user", "content": [
+            { "type": "text", "text": "regarde" },
+            { "type": "image_url", "image_url": { "url": "data:image/png;base64,QUJD" } },
+        ]})];
+        let b = body(&msgs, None, "m", Effort::Off, false);
+        assert_eq!(b["messages"][0]["content"][0]["text"], "regarde");
+        assert_eq!(b["messages"][0]["content"][1]["type"], "image");
+        assert_eq!(b["messages"][0]["content"][1]["source"]["media_type"], "image/png");
+        assert_eq!(b["messages"][0]["content"][1]["source"]["data"], "QUJD");
     }
 
     #[test]

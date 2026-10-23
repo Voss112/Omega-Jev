@@ -58,21 +58,32 @@ pub fn preamble(route: &Route, root: &Path, first_turn: bool, loaded: &[&str]) -
 
 pub fn request(conv: &Conversation, env: &Env) -> Value {
     let cutoff = compaction_cutoff(conv);
+    let vision = env.settings.engine.vision();
     let mut messages = vec![json!({ "role": "system", "content": prompts::system(&env.settings, &env.workspace()) })];
     let from = conv.summary.as_ref().map_or(0, |s| {
         messages.push(json!({ "role": "system", "content": format!("Summary of the earlier conversation:
 {}", s.text) }));
         s.upto
     });
-    messages.extend(conv.messages.iter().enumerate().skip(from).map(|(i, m)| wire(m, i < cutoff)));
+    messages.extend(conv.messages.iter().enumerate().skip(from).map(|(i, m)| wire(m, i < cutoff, vision)));
     let tools = (!conv.toolset.is_empty()).then(|| schema::schemas(&conv.toolset));
     env.llm.body(&messages, tools)
 }
 
-fn wire(m: &Message, compact: bool) -> Value {
+fn wire(m: &Message, compact: bool, vision: bool) -> Value {
     match m.role {
-        Role::User if m.preamble.is_empty() => json!({ "role": "user", "content": m.content }),
-        Role::User => json!({ "role": "user", "content": format!("<ctx>\n{}\n</ctx>\n{}", m.preamble, m.content) }),
+        Role::User => {
+            let text = if m.preamble.is_empty() { m.content.clone() } else { format!("<ctx>\n{}\n</ctx>\n{}", m.preamble, m.content) };
+            if vision && !m.images.is_empty() {
+                let mut parts = vec![json!({ "type": "text", "text": text })];
+                parts.extend(m.images.iter().map(|img| {
+                    json!({ "type": "image_url", "image_url": { "url": format!("data:{};base64,{}", img.media, img.data) } })
+                }));
+                json!({ "role": "user", "content": parts })
+            } else {
+                json!({ "role": "user", "content": text })
+            }
+        }
         Role::Assistant => {
             let mut v = json!({ "role": "assistant", "content": m.content });
             if !m.reasoning.is_empty() {

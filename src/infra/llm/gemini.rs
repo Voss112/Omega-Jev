@@ -43,7 +43,7 @@ pub fn body(messages: &[Value], tools: Option<Value>, model: &str, project: &str
                 let content = m["content"].as_str().unwrap_or_default();
                 contents.push(json!({ "role": "user", "parts": [{ "functionResponse": { "name": name, "response": { "content": content } } }] }));
             }
-            _ => contents.push(json!({ "role": "user", "parts": [{ "text": m["content"].as_str().unwrap_or_default() }] })),
+            _ => contents.push(json!({ "role": "user", "parts": user_parts(&m["content"]) })),
         }
     }
 
@@ -83,6 +83,25 @@ pub fn body(messages: &[Value], tools: Option<Value>, model: &str, project: &str
         }
     }
     gemini::envelope(project, model, request)
+}
+
+/// Canonical (OpenAI-shaped) user content → Gemini parts; `data:` URLs become inline images.
+fn user_parts(content: &Value) -> Vec<Value> {
+    let Some(parts) = content.as_array() else {
+        return vec![json!({ "text": content.as_str().unwrap_or_default() })];
+    };
+    parts
+        .iter()
+        .filter_map(|p| match p["type"].as_str().unwrap_or_default() {
+            "text" => Some(json!({ "text": p["text"].as_str().unwrap_or_default() })),
+            "image_url" => {
+                let url = p["image_url"]["url"].as_str().unwrap_or_default();
+                let (media, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
+                Some(json!({ "inlineData": { "mimeType": media, "data": data } }))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn call_names(messages: &[Value]) -> HashMap<String, String> {
@@ -163,6 +182,19 @@ mod tests {
         let b = body(&msgs, None, "m", "p", Effort::Off);
         assert_eq!(b["request"]["contents"].as_array().unwrap().len(), 0);
         assert_eq!(b["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0);
+    }
+
+    #[test]
+    fn a_data_url_becomes_an_inline_image_part() {
+        let msgs = vec![json!({ "role": "user", "content": [
+            { "type": "text", "text": "regarde" },
+            { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,QUJD" } },
+        ]})];
+        let b = body(&msgs, None, "m", "p", Effort::Off);
+        let parts = &b["request"]["contents"][0]["parts"];
+        assert_eq!(parts[0]["text"], "regarde");
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "image/jpeg");
+        assert_eq!(parts[1]["inlineData"]["data"], "QUJD");
     }
 
     #[test]

@@ -12,6 +12,9 @@ eframe = "0.37"
 egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark", "better_syntax_highlighting"] }
 rfd = "0.17"
 open = "5"
+# Images collées / déposées (arboard est déjà tiré par egui pour le presse-papiers texte)
+arboard = { version = "3", features = ["image-data"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
 # Runtime & réseau
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }

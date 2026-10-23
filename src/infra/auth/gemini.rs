@@ -131,13 +131,19 @@ pub async fn tier(http: &Client, access: &str, project: &str) -> Result<(String,
 /// #3501: the Google account has no Gemini Code Assist licence — say what to do instead of quoting the API.
 fn license_hint(err: anyhow::Error) -> anyhow::Error {
     let text = format!("{err:#}");
-    if text.contains("3501") || text.contains("valid license") {
-        return anyhow::anyhow!(
-            "Compte Google sans licence Gemini Code Assist (403 #3501). Activez Code Assist sur ce compte \
-             (codeassist.google.com), puis reconnectez-vous — ou passez Gemini en « Clé API » dans ⚙ Paramètres."
-        );
+    match hint(&text) {
+        Some(message) => anyhow::anyhow!("{message}"),
+        None => err,
     }
-    err
+}
+
+/// The actionable rewrite of a Code Assist licence error, if the body is one.
+pub fn hint(body: &str) -> Option<String> {
+    (body.contains("3501") || body.contains("valid license")).then(|| {
+        "Compte Google sans licence Gemini Code Assist (403 #3501). Activez Code Assist sur ce compte \
+         (codeassist.google.com), puis reconnectez-vous — ou passez Gemini en « Clé API » dans ⚙ Paramètres."
+            .to_owned()
+    })
 }
 
 pub fn tier_of(v: &Value) -> Option<(String, String)> {

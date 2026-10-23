@@ -6,7 +6,7 @@ use eframe::egui::{
 };
 
 use super::{
-    App,
+    App, attach,
     chat::column,
     theme::{ACCENT, AMBER, BORDER, FAINT, HOVER, MUTED, RAISED, RED, TEXT},
 };
@@ -24,6 +24,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let mut stop = false;
     let mut cancel_edit = false;
     let mut schedule = false;
+    let mut pick = false;
+    let ctx = ui.ctx().clone();
+    app.collect_images(&ctx);
     column(ui, |ui| {
         if app.editing.is_some() {
             ui.horizontal(|ui| {
@@ -45,6 +48,22 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             .inner_margin(Margin { left: 16, right: 10, top: 12, bottom: 8 })
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                if !app.shots.is_empty() {
+                    let (shots, tex) = (&app.shots, &mut app.tex);
+                    let mut remove = None;
+                    ui.horizontal_wrapped(|ui| {
+                        let ctx = ui.ctx().clone();
+                        for (i, img) in shots.iter().enumerate() {
+                            if attach::thumb(ui, &ctx, tex, img, 64.0, true) {
+                                remove = Some(i);
+                            }
+                        }
+                    });
+                    if let Some(i) = remove {
+                        app.shots.remove(i);
+                    }
+                    ui.add_space(6.0);
+                }
                 ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
                     let edit = TextEdit::multiline(&mut app.draft)
                         .id(id)
@@ -61,6 +80,13 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     }
                 });
                 ui.horizontal(|ui| {
+                    if ui
+                        .add(eframe::egui::Button::new(RichText::new("🖼").size(15.0).color(MUTED)).frame(false))
+                        .on_hover_text("Joindre une image — glisser-déposer et Ctrl+V marchent aussi")
+                        .clicked()
+                    {
+                        pick = true;
+                    }
                     engine_picker(app, ui);
                     bypass_toggle(app, ui);
                     if ui
@@ -90,6 +116,15 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     });
     if cancel_edit {
         app.cancel_edit();
+    }
+    if pick {
+        let picked = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "gif", "bmp"]).pick_files();
+        for path in picked.unwrap_or_default() {
+            match attach::from_path(&path) {
+                Ok(img) => app.attach(img),
+                Err(e) => app.notify(e),
+            }
+        }
     }
     if schedule {
         app.open_schedule();

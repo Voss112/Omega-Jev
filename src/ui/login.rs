@@ -33,7 +33,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new("Collez le code affiché après validation").size(12.5).color(MUTED));
                 ui.add(TextEdit::singleline(&mut login.paste).hint_text("code#state").desired_width(f32::INFINITY));
                 ui.add_space(6.0);
-                submit = widgets::primary(ui, "Valider", 130.0).clicked() && !login.paste.trim().is_empty();
+                submit = widgets::primary(ui, "Valider", 130.0).clicked() && !login.paste.trim().is_empty() && !login.submitting;
             }
             if !login.status.is_empty() {
                 ui.add_space(10.0);

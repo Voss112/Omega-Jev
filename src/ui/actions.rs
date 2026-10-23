@@ -216,10 +216,13 @@ impl App {
 
     /// Exchanges the code the user pasted from the provider page.
     pub(super) fn submit_code(&mut self) {
-        let Some(login) = self.login.clone() else { return };
-        if login.paste.trim().is_empty() {
+        let Some(mut login) = self.login.clone() else { return };
+        if login.paste.trim().is_empty() || login.submitting {
             return;
         }
+        login.submitting = true;
+        login.status = "Validation…".to_owned();
+        self.login = Some(login.clone());
         let (env, emit, provider) = (self.env.clone(), self.emit.clone(), login.provider);
         self.spawn(async move {
             let result = crate::app::login::finish_paste(&env.http, &login, login.paste.trim()).await;
@@ -274,6 +277,7 @@ impl App {
             }
             Err(e) => {
                 if let Some(login) = &mut self.login {
+                    login.submitting = false;
                     login.status = e;
                 } else {
                     self.notify(e);

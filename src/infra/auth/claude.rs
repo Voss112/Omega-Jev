@@ -50,12 +50,12 @@ pub async fn exchange(http: &Client, pasted: &str, verifier: &str, default_state
         "redirect_uri": REDIRECT,
         "code_verifier": verifier,
     });
-    token(http, &body).await
+    cli_fallback(token(http, &body).await)
 }
 
 pub async fn refresh(http: &Client, cred: &Cred) -> Result<Cred> {
     let body = json!({ "grant_type": "refresh_token", "refresh_token": cred.refresh, "client_id": CLIENT_ID });
-    let mut renewed = token(http, &body).await?;
+    let mut renewed = cli_fallback(token(http, &body).await)?;
     if renewed.refresh.is_empty() {
         renewed.refresh.clone_from(&cred.refresh);
     }
@@ -63,7 +63,60 @@ pub async fn refresh(http: &Client, cred: &Cred) -> Result<Cred> {
     Ok(renewed)
 }
 
+/// 429 from the token endpoint; `wait` is the server's `Retry-After` when it sent one.
+#[derive(Debug)]
+pub struct RateLimited {
+    pub wait: Option<std::time::Duration>,
+}
+
+impl std::fmt::Display for RateLimited {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.wait {
+            Some(wait) => write!(
+                f,
+                "Anthropic limite l'échange de jetons depuis cette connexion (429). Réessayez dans {} s, \
+                 importez la session Claude Code, ou collez un jeton d'abonnement (sk-ant-oat…).",
+                wait.as_secs().max(1)
+            ),
+            None => write!(
+                f,
+                "Anthropic limite l'échange de jetons depuis cette connexion (429). Réessayez dans une minute, \
+                 importez la session Claude Code, ou collez un jeton d'abonnement (sk-ant-oat…)."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RateLimited {}
+
+/// `Retry-After` is sent in seconds by Anthropic. Anything else means "retry with the default".
+fn parse_retry_after(value: Option<&str>) -> Option<std::time::Duration> {
+    value?.trim().parse::<u64>().ok().map(std::time::Duration::from_secs)
+}
+
+/// A Claude Code session is already logged in on this machine; use it instead of failing on 429.
+fn cli_fallback(result: Result<Cred>) -> Result<Cred> {
+    let Err(error) = result else {
+        return result;
+    };
+    if error.downcast_ref::<RateLimited>().is_none() {
+        return Err(error);
+    }
+    let Some(dir) = cli_dir() else {
+        return Err(error);
+    };
+    match import_cli(&dir) {
+        Some(cred) if usable(&cred, chrono::Utc::now().timestamp()) => Ok(cred),
+        _ => Err(error),
+    }
+}
+
+fn usable(cred: &Cred, now: i64) -> bool {
+    cred.expires_at == 0 || cred.expires_at - now > 60
+}
+
 async fn token(http: &Client, body: &Value) -> Result<Cred> {
+    const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
     let mut attempt = 0;
     loop {
         let res = http
@@ -75,26 +128,18 @@ async fn token(http: &Client, body: &Value) -> Result<Cred> {
             .await
             .context("connexion au serveur de jetons Claude")?;
         let status = res.status();
-        // The endpoint rate-limits per IP: one short wait is worth it, a loop is not.
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt == 0 {
+        let retry_after = parse_retry_after(res.headers().get("retry-after").and_then(|v| v.to_str().ok()));
+        // One retry is worth it when the server asks for a short wait; a long Retry-After is reported as-is.
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt == 0 && retry_after.is_none_or(|wait| wait <= MAX_WAIT) {
             attempt = 1;
-            let wait = res
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(3)
-                .clamp(1, 10);
-            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            let wait = retry_after.unwrap_or(std::time::Duration::from_secs(3)).clamp(std::time::Duration::from_secs(1), MAX_WAIT);
+            tokio::time::sleep(wait).await;
             continue;
         }
         let text = res.text().await.unwrap_or_default();
         if !status.is_success() {
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                anyhow::bail!(
-                    "Anthropic limite l'échange de jetons depuis cette connexion (429). Réessayez dans une minute, \
-                     importez la session Claude Code, ou collez un jeton d'abonnement (sk-ant-oat…)."
-                );
+                return Err(RateLimited { wait: retry_after }.into());
             }
             anyhow::bail!("Claude {status} : {}", oauth_error(&text));
         }
@@ -223,6 +268,24 @@ mod tests {
         let c = import_cli(&dir).unwrap();
         assert_eq!((c.access.as_str(), c.refresh.as_str(), c.expires_at, c.account.as_str()), ("at", "rt", 1_700_000_000, "max"));
         assert!(import_cli(&dir.join("nope")).is_none());
+    }
+
+    #[test]
+    fn a_rate_limit_carries_its_retry_delay() {
+        assert_eq!(parse_retry_after(Some("42")), Some(std::time::Duration::from_secs(42)));
+        assert_eq!(parse_retry_after(Some("later")), None);
+        let message = RateLimited { wait: Some(std::time::Duration::from_secs(42)) }.to_string();
+        assert!(message.contains("42 s") && message.contains("sk-ant-oat"));
+    }
+
+    #[test]
+    fn only_a_fresh_cli_session_replaces_a_rate_limited_exchange() {
+        let now = 1_000;
+        let fresh = Cred { expires_at: now + 3_600, ..Cred::default() };
+        let stale = Cred { expires_at: now + 30, ..Cred::default() };
+        assert!(usable(&fresh, now));
+        assert!(!usable(&stale, now));
+        assert!(usable(&Cred::default(), now), "expiration inconnue acceptée");
     }
 
     #[test]

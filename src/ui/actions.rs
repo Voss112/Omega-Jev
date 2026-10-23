@@ -340,7 +340,7 @@ impl App {
             return;
         }
         for bytes in attach::dropped(ctx) {
-            match attach::from_bytes(&bytes) {
+            match bytes.and_then(|b| attach::from_bytes(&b)) {
                 Ok(img) => self.attach(img),
                 Err(e) => self.notify(e),
             }

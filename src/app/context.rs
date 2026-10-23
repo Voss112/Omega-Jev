@@ -75,12 +75,18 @@ fn wire(m: &Message, compact: bool, vision: bool) -> Value {
         Role::User => {
             let text = if m.preamble.is_empty() { m.content.clone() } else { format!("<ctx>\n{}\n</ctx>\n{}", m.preamble, m.content) };
             if vision && !m.images.is_empty() {
-                let mut parts = vec![json!({ "type": "text", "text": text })];
+                // Claude/Gemini reject empty text blocks: an image-only turn sends images alone.
+                let mut parts = Vec::new();
+                if !text.is_empty() {
+                    parts.push(json!({ "type": "text", "text": text }));
+                }
                 parts.extend(m.images.iter().map(|img| {
                     json!({ "type": "image_url", "image_url": { "url": format!("data:{};base64,{}", img.media, img.data) } })
                 }));
                 json!({ "role": "user", "content": parts })
             } else {
+                // Image-only turn on a text engine: keep a non-empty user message.
+                let text = if text.is_empty() && !m.images.is_empty() { "[image]".to_owned() } else { text };
                 json!({ "role": "user", "content": text })
             }
         }
@@ -142,5 +148,25 @@ mod tests {
         let p = preamble(&security_route(), std::path::Path::new("."), false, &["security-audit"]);
         assert!(p.contains("Follow it again"));
         assert_eq!(p.matches("security-audit").count(), 1, "le corps ne doit pas être renvoyé");
+    }
+
+    fn screenshot() -> crate::domain::chat::Image {
+        crate::domain::chat::Image { media: "image/png".into(), data: "QUJD".into() }
+    }
+
+    #[test]
+    fn an_image_only_turn_sends_no_empty_text_block() {
+        let m = Message::user_with(String::new(), vec![screenshot()]);
+        let w = wire(&m, false, true);
+        let parts = w["content"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["type"], "image_url");
+    }
+
+    #[test]
+    fn a_text_engine_gets_a_placeholder_for_an_image_only_turn() {
+        let m = Message::user_with(String::new(), vec![screenshot()]);
+        let w = wire(&m, false, false);
+        assert_eq!(w["content"], "[image]");
     }
 }

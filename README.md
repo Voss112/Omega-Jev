@@ -6,13 +6,20 @@ Tout tient dans un seul binaire (Windows et Linux), sans serveur externe ni tél
 
 ## Démarrage
 
-1. Windows : double-cliquer `Omega-0.2.0-x64.msi` (installation par utilisateur, sans droits admin, raccourci Bureau). Linux : `target/release/omega`.
+1. Windows : double-cliquer `Omega-0.3.0-x64.msi` (installation par utilisateur, sans droits admin, raccourci Bureau). Linux : `target/release/omega`.
 2. Au premier lancement, la fenêtre ⚙ Paramètres s'ouvre. Coller la clé **Kimi** (platform.kimi.ai) et/ou **DeepSeek** (platform.deepseek.com) et la clé **Jev** (console.typesafe.ai ; sans elle, un routeur local prend le relais).
 3. Choisir un dossier de travail (📁 en bas à gauche). Par défaut : `%APPDATA%/Omega/workspace`.
 
 Les clés peuvent aussi venir des variables `MOONSHOT_API_KEY`, `DEEPSEEK_API_KEY` et `TYPESAFE_API_KEY`.
 
 Règles permanentes d'un projet : `OMEGA.md` à sa racine (bouton « Créer OMEGA.md » dans le panneau Outils). `AGENTS.md` et `CLAUDE.md` sont aussi lus.
+
+## Interface
+
+- **Fichiers** (bouton 📁 en haut) : arborescence du dossier de travail, clic pour ouvrir un fichier dans un onglet au-dessus de la discussion, visionneuse numérotée en lecture seule (512 Ko max, binaire détecté).
+- **Images** : glisser-déposer, `Ctrl+V` (capture d'écran) ou 🖼 dans la zone de saisie. Redimensionnées à 1568 px, 4 max par message, vignettes dans la bulle. Envoyées uniquement aux moteurs qui lisent les images (Claude, Gemini) ; Kimi/DeepSeek les gardent locales.
+- **⏰ Programmer** : prompt + jour + heure + moteur + effort, répétition quotidienne optionnelle. À l'heure dite, Omega ouvre une discussion et l'exécute **toujours en bypass**. Les tâches sont enregistrées dans `%APPDATA%/Omega/schedules.json` et ne partent que si Omega est ouvert.
+- **Dernier verdict Jev** : skill, source, confiance, cinq métriques (code, web, risque, impact, apps) et outils chargés, en cartes compactes.
 
 ## Compiler
 
@@ -53,6 +60,8 @@ Linux : paquets X11/Wayland usuels requis à l'exécution (comme toute app egui)
 
 - Données 100 % locales (`%APPDATA%/Omega` ou `~/.local/share/Omega`), fichiers en `0600` sous Linux.
 - Clés API chiffrées par DPAPI (liées à votre compte Windows).
+- Abonnements : jetons OAuth scellés dans `credentials/` (DPAPI), rafraîchis en série ; jeton Claude longue durée (`claude setup-token`) accepté sans échange réseau.
+- Images : redimensionnées et stockées dans la discussion locale, jamais envoyées à un moteur qui ne les lit pas.
 - Anti-SSRF : redirections et résolutions DNS vers des adresses privées refusées ; pages web marquées « non fiables ».
 - User-Agent générique, aucun identifiant envoyé hors des appels API.
 - Proxy/Tor (`socks5h://127.0.0.1:9050`), détection VPN, kill-switch optionnel.
@@ -66,5 +75,5 @@ src/
   infra/    Kimi / DeepSeek (SSE), Jev, disque, HTTP, processus, VPN, DPAPI
   app/      cas d'usage : routeur Jev, assemblage du contexte, boucle agent, auto-tests
   tools/    outils natifs (fs, code, graphe, grep, shell, sécurité, web, compression)
-  ui/       interface egui (thème, sidebar, chat, composer, panneau outils, réglages)
+  ui/       interface egui (thème, sidebar, explorateur/onglets, chat, composer, planificateur, panneau outils, réglages)
 ```

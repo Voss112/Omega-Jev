@@ -43,7 +43,7 @@ impl Provider {
 }
 
 /// OAuth credentials of one subscription. `access`/`refresh` are sealed at rest.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Cred {
     pub access: String,
@@ -56,6 +56,19 @@ pub struct Cred {
     pub project: String,
 }
 
+/// Tokens never reach a log, a panic message or a debug print.
+impl std::fmt::Debug for Cred {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cred")
+            .field("access", &"<scellé>")
+            .field("refresh", &"<scellé>")
+            .field("expires_at", &self.expires_at)
+            .field("account", &self.account)
+            .field("project", &self.project)
+            .finish()
+    }
+}
+
 /// One usage window of a subscription plan (best-effort, hidden when unavailable).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Window {
@@ -63,4 +76,24 @@ pub struct Window {
     /// 0.0..=1.0 of the plan allowance already used.
     pub fraction: f32,
     pub resets: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_never_prints_tokens() {
+        let cred = Cred { access: "at-secret".into(), refresh: "rt-secret".into(), ..Cred::default() };
+        let text = format!("{cred:?}");
+        assert!(!text.contains("at-secret") && !text.contains("rt-secret"), "{text}");
+        assert!(text.contains("scellé"));
+    }
+
+    #[test]
+    fn subscription_providers_map_to_their_engine() {
+        assert_eq!(Provider::Claude.engine(), crate::domain::engine::Engine::Claude);
+        assert_eq!(Provider::Gemini.engine(), crate::domain::engine::Engine::Gemini);
+        assert_eq!((Provider::Claude.id(), Provider::Gemini.id()), ("claude", "gemini"));
+    }
 }

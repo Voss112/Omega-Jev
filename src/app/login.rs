@@ -73,7 +73,7 @@ fn free_port() -> Result<u16> {
 pub async fn finish_paste(http: &Client, login: &Login, code: &str) -> Result<Cred> {
     match login.provider {
         Provider::Claude => claude::exchange(http, code, &login.verifier, &login.state).await,
-        Provider::Gemini => gemini::exchange(http, code, &login.verifier, &login.redirect).await,
+        Provider::Gemini => gemini_connect(http, code, &login.verifier, &login.redirect).await,
     }
 }
 
@@ -83,7 +83,21 @@ pub async fn await_gemini(http: &Client, login: &Login) -> Result<Cred> {
         bail!("port de retour manquant");
     }
     let code = crate::infra::auth::pkce::await_code(login.port, &login.state, std::time::Duration::from_secs(300)).await?;
-    gemini::exchange(http, &code, &login.verifier, &login.redirect).await
+    gemini_connect(http, &code, &login.verifier, &login.redirect).await
+}
+
+/// Exchanges the code, then attaches the Code Assist project so the first message already works.
+async fn gemini_connect(http: &Client, code: &str, verifier: &str, redirect: &str) -> Result<Cred> {
+    let mut cred = gemini::exchange(http, code, verifier, redirect).await?;
+    if let Ok((tier, project)) = gemini::tier(http, &cred.access, "").await {
+        if cred.account.is_empty() || cred.account == "google" {
+            cred.account = tier;
+        }
+        if !project.is_empty() {
+            cred.project = project;
+        }
+    }
+    Ok(cred)
 }
 
 /// Reads the session the official Claude Code CLI already logged in.

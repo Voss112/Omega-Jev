@@ -89,12 +89,18 @@ impl Llm {
         match self.engine.wire() {
             Wire::OpenAi => openai::body(&self.model, self.engine, self.effort, messages, tools),
             Wire::Anthropic => anthropic::body(messages, tools, &self.model, self.effort, self.auth.is_some()),
-            Wire::Gemini => gemini::body(messages, tools, &self.model, &self.project, self.effort),
+            Wire::Gemini => gemini::body(messages, tools, &self.model, &self.project(), self.effort),
         }
+    }
+
+    /// Code Assist project: the stored one wins, onboarding may have attached a new one.
+    fn project(&self) -> String {
+        self.auth.as_ref().map(|a| a.project()).filter(|p| !p.is_empty()).unwrap_or_else(|| self.project.clone())
     }
 
     /// Model ids this credential can use.
     pub async fn models(&self) -> Result<Vec<String>> {
+        anyhow::ensure!(self.base.starts_with("https://"), "URL {} non HTTPS refusée", self.engine.label());
         let (url, oauth) = match self.engine.wire() {
             Wire::Gemini => return Ok(Vec::new()),
             Wire::OpenAi => (format!("{}/models", self.base), false),
@@ -116,8 +122,11 @@ impl Llm {
         if self.engine.wire() == Wire::Gemini {
             let auth = self.auth.as_ref().with_context(|| self.missing())?;
             let token = auth.fresh(&self.http).await?;
-            let (tier, project) = gemini_auth::tier(&self.http, &token, &self.project).await?;
+            let (tier, project) = gemini_auth::tier(&self.http, &token, &self.project()).await?;
             anyhow::ensure!(!project.is_empty(), "Code Assist : aucun projet attaché (offre {tier})");
+            if project != auth.project() {
+                auth.save(crate::domain::auth::Cred { project, ..auth.cred() })?;
+            }
             return Ok(());
         }
         match self.models().await {

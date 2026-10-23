@@ -19,7 +19,7 @@ pub mod webindex;
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -121,7 +121,14 @@ async fn exec(ctx: &ToolCtx<'_>, kind: ToolKind, a: Args<'_>) -> Result<ToolOutp
             "run" => clihub::run(ctx, &a.str("name")?, a.list("args"), a.num("timeout").unwrap_or(300)).await,
             other => Err(anyhow!("unknown action `{other}` (search|info|install|run)")),
         },
-        ToolKind::AuditKit => blocking(move || audit::install(&root)).await,
+        ToolKind::AuditKit => {
+            let manifest = format!("{} fichiers → {}", audit::FILES.len(), root.join(".omega/skills/security-audit").display());
+            let reason = "Installation du skill d'audit Cloudflare (documentation, jamais exécutée)".to_owned();
+            if ctx.env.settings.confirm_edits && !approve(ctx, ApprovalKind::Edit, manifest, reason).await {
+                bail!("installation refusée");
+            }
+            blocking(move || audit::install(&root)).await
+        }
     };
     text.map(ToolOutput::from)
 }

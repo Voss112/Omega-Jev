@@ -55,11 +55,13 @@ pub fn read_from(dir: &Path, provider: Provider) -> Option<Cred> {
     serde_json::from_str(&secret::open(raw.trim())).ok()
 }
 
-/// State of one provider's credentials
+/// Shared handle on one provider's credentials: reads, refreshes and persists them.
 pub struct Auth {
     provider: Provider,
     dir: PathBuf,
     state: Mutex<Cred>,
+    /// Serialises refreshes: providers rotate refresh tokens, a concurrent pair would burn one.
+    gate: tokio::sync::Mutex<()>,
 }
 
 impl Auth {
@@ -67,7 +69,7 @@ impl Auth {
     pub fn load(provider: Provider) -> Option<Arc<Self>> {
         let dir = paths::creds();
         let cred = read_from(&dir, provider)?;
-        Some(Arc::new(Self { provider, dir, state: Mutex::new(cred) }))
+        Some(Arc::new(Self { provider, dir, state: Mutex::new(cred), gate: tokio::sync::Mutex::new(()) }))
     }
 
     /// In-memory only (fresh login before the file is written).
@@ -104,6 +106,12 @@ impl Auth {
 
     /// A valid access token, refreshed and persisted first when needed.
     pub async fn fresh(&self, http: &Client) -> Result<String> {
+        let now = chrono::Utc::now().timestamp();
+        if !self.needs_refresh(now) {
+            return Ok(self.access());
+        }
+        // One refresher at a time; the others see the renewed token when they get the gate.
+        let _gate = self.gate.lock().await;
         let now = chrono::Utc::now().timestamp();
         if !self.needs_refresh(now) {
             return Ok(self.access());

@@ -68,8 +68,10 @@ pub fn body(messages: &[Value], tools: Option<Value>, model: &str, effort: Effor
         "max_tokens": budget.map_or(NO_THINKING_MAX, |b| (b + NO_THINKING_MAX).min(MAX_TOKENS_CAP)),
         "messages": out,
         "stream": true,
-        "system": system,
     });
+    if !system.is_empty() {
+        body["system"] = system.into();
+    }
     if oauth && let Some(budget) = budget {
         body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
     }
@@ -228,7 +230,7 @@ mod tests {
         let b = body(&msgs, None, "m", Effort::Off, false);
         assert_eq!(b["messages"][0]["content"][0]["input"], json!({}));
         assert!(b.get("thinking").is_none());
-        assert_eq!(b["system"].as_array().map(Vec::len), Some(0), "sans OAuth et sans prompt système: aucun bloc");
+        assert!(b.get("system").is_none(), "aucun bloc système: le champ est omis");
         assert_eq!(b["max_tokens"], 8_192);
     }
 

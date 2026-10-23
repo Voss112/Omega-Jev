@@ -185,6 +185,7 @@ impl App {
 
     /// Opens the provider page and starts the OAuth dance.
     pub(super) fn connect(&mut self, provider: Provider) {
+        self.settings_draft = None;
         let started = match provider {
             Provider::Claude => Ok(crate::app::login::claude_start()),
             Provider::Gemini => crate::app::login::gemini_start(),

@@ -14,4 +14,8 @@ Task 10: complete BUT two deviations — see rulings.
 Task 10: Ruling: OAuth exchange signatures take `(verifier, state/redirect)` strings instead of `&Pkce`, because the verifier must survive in UI state after `Pkce` is dropped — cost: none, clearer.
 Task 10: Ruling: `Login` lives in `app::login` (data) and is rendered by `ui::login`, not `ui::login::Login` as the plan wrote — cost: one import path differs from the plan.
 Task 10: complete (claude_start/gemini_start/finish_paste/await_gemini/import_cli/persist, modal, settings section, Event::Connected/PlanUsage; `cargo test` 39 passed, clippy clean, `cargo build` OK; commit 82e9f26).
+Plan 2 (2026-10-23-skill-audit-securite.md): Task 1 complete (bundle c1c8a8c vendored verbatim + SOURCE.md, Group enum, 16 playbooks; test playbook 2/2, commit 0f3d3c0).
+Plan 2 Task 2: complete (Skill::Security -> playbook security-audit, [audit] hint in preamble, tests context 2/2).
+Plan 2 Task 3: complete (tools/audit.rs bundle macro, install idempotent, never overwrites findings.json, ToolKind::AuditKit 16e outil, schema; tests tools::audit 3/3).
+Plan 2 Task 4: complete (health entry "Skill audit (Cloudflare)" + playbooks group label + README; clippy -D warnings clean, 48 tests green).
 <!-- end -->

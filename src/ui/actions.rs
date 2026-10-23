@@ -331,6 +331,62 @@ impl App {
             }
         }));
     }
+
+    /// Opens the scheduler with the current draft as the default prompt.
+    pub(super) fn open_schedule(&mut self) {
+        let prompt = std::mem::take(&mut self.draft);
+        self.schedule_draft = Some(super::schedule::Draft::new(
+            prompt,
+            self.settings.engine,
+            self.settings.effort.get(self.settings.engine),
+        ));
+        self.schedule_error = None;
+    }
+
+    pub(super) fn persist_jobs(&mut self) {
+        if let Err(e) = crate::infra::store::save_jobs(&self.jobs) {
+            self.notify(format!("Programmation non enregistrée : {e:#}"));
+        }
+    }
+
+    /// Fires every job whose instant has passed. Each one starts its own conversation, in bypass.
+    pub(super) fn fire_due_jobs(&mut self) {
+        let now = chrono::Utc::now();
+        let due: Vec<crate::domain::schedule::Job> = self.jobs.iter().filter(|j| j.due(now)).cloned().collect();
+        if due.is_empty() {
+            return;
+        }
+        self.jobs.retain_mut(|j| {
+            if j.due(now) {
+                if j.daily {
+                    j.advance(now);
+                    return true;
+                }
+                return false;
+            }
+            true
+        });
+        self.persist_jobs();
+        for job in due {
+            let mut settings = self.settings.clone();
+            settings.engine = job.engine;
+            settings.effort.set(job.engine, job.effort);
+            // A scheduled run never waits for a human: bypass is part of the contract.
+            settings.bypass = true;
+            self.apply_settings(settings);
+            self.new_chat();
+            self.notify("Tâche programmée lancée (bypass)");
+            self.send_text(job.prompt);
+        }
+    }
+}
+
+impl App {
+    /// Same path as `send`, minus the composer.
+    pub(super) fn send_text(&mut self, text: String) {
+        self.draft = text;
+        self.send();
+    }
 }
 
 const RULES_TEMPLATE: &str = "# Règles du projet (lues par Omega à chaque requête)

@@ -8,6 +8,7 @@ mod events;
 mod files;
 mod login;
 mod panel;
+mod schedule;
 mod settings;
 mod sidebar;
 mod theme;
@@ -97,6 +98,10 @@ pub struct App {
     heights: HashMap<(Uuid, usize), (f32, f32, i64)>,
     /// Explorer, open tabs and the read-only viewer.
     files: files::Files,
+    /// Prompts programmés (toujours en bypass).
+    jobs: Vec<crate::domain::schedule::Job>,
+    schedule_draft: Option<schedule::Draft>,
+    schedule_error: Option<String>,
 }
 
 impl App {
@@ -140,6 +145,9 @@ impl App {
             md: CommonMarkCache::default(),
             heights: HashMap::new(),
             files: files::Files::default(),
+            jobs: store::load_jobs(),
+            schedule_draft: None,
+            schedule_error: None,
         };
         if let Some(n) = notice {
             app.notify(n);
@@ -271,5 +279,10 @@ impl eframe::App for App {
             });
         settings::show(self, &ctx);
         login::show(self, &ctx);
+        schedule::show(self, &ctx);
+        self.fire_due_jobs();
+        if !self.jobs.is_empty() {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
     }
 }

@@ -37,6 +37,11 @@ pub fn creds() -> PathBuf {
     root().join("credentials")
 }
 
+/// Prompts programmés (aucun secret).
+pub fn schedules() -> PathBuf {
+    root().join("schedules.json")
+}
+
 pub fn ensure() -> io::Result<()> {
     [conversations(), web_cache(), workspace(), creds()].iter().try_for_each(fs::create_dir_all)
 }

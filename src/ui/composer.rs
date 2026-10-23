@@ -23,6 +23,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let mut send = focused && !busy && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
     let mut stop = false;
     let mut cancel_edit = false;
+    let mut schedule = false;
     column(ui, |ui| {
         if app.editing.is_some() {
             ui.horizontal(|ui| {
@@ -62,6 +63,13 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 ui.horizontal(|ui| {
                     engine_picker(app, ui);
                     bypass_toggle(app, ui);
+                    if ui
+                        .add(eframe::egui::Button::new(RichText::new("⏰ Programmer").size(12.5).color(MUTED)).frame(false))
+                        .on_hover_text("Envoyer ce prompt plus tard, avec le moteur et l'effort choisis (toujours en bypass)")
+                        .clicked()
+                    {
+                        schedule = true;
+                    }
                     ui.label(RichText::new(app.settings.style.label()).size(11.5).color(FAINT))
                         .on_hover_text("Style de sortie (Paramètres)");
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -82,6 +90,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     });
     if cancel_edit {
         app.cancel_edit();
+    }
+    if schedule {
+        app.open_schedule();
     }
     if send {
         app.send();

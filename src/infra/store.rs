@@ -81,10 +81,18 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Scheduled prompts; a corrupt file must never block the app.
+pub fn load_jobs() -> Vec<crate::domain::schedule::Job> {
+    fs::read_to_string(paths::schedules()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+pub fn save_jobs(jobs: &[crate::domain::schedule::Job]) -> Result<()> {
+    write_private(&paths::schedules(), serde_json::to_vec_pretty(jobs)?.as_slice())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::domain::settings::Settings;
-
     #[test]
     fn no_api_key_is_ever_written_in_plaintext() {
         let s = Settings {

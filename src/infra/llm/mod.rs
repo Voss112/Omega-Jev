@@ -93,9 +93,17 @@ impl Llm {
         }
     }
 
-    /// Code Assist project: the stored one wins, onboarding may have attached a new one.
+    /// Code Assist project: stored one wins, then the environment, as the official CLI does.
     fn project(&self) -> String {
-        self.auth.as_ref().map(|a| a.project()).filter(|p| !p.is_empty()).unwrap_or_else(|| self.project.clone())
+        let stored = self.auth.as_ref().map(|a| a.project()).unwrap_or_default();
+        if !stored.is_empty() {
+            return stored;
+        }
+        if self.project.is_empty() {
+            gemini_auth::env_project()
+        } else {
+            self.project.clone()
+        }
     }
 
     /// Model ids this credential can use.

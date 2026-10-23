@@ -22,6 +22,8 @@ pub struct Login {
     pub paste: String,
     pub status: String,
     pub listening: bool,
+    /// An exchange is in flight; blocks a second POST that would trigger a 429.
+    pub submitting: bool,
     /// Loopback port for the Gemini redirect.
     pub port: u16,
 }
@@ -39,6 +41,7 @@ pub fn claude_start() -> (String, Login) {
         paste: String::new(),
         status: String::new(),
         listening: false,
+        submitting: false,
         port: 0,
     };
     (url, login)
@@ -59,6 +62,7 @@ pub fn gemini_start() -> Result<(String, Login)> {
         paste: String::new(),
         status: String::new(),
         listening: true,
+        submitting: false,
         port,
     };
     Ok((url, login))
@@ -89,14 +93,11 @@ pub async fn await_gemini(http: &Client, login: &Login) -> Result<Cred> {
 /// Exchanges the code, then attaches the Code Assist project so the first message already works.
 async fn gemini_connect(http: &Client, code: &str, verifier: &str, redirect: &str) -> Result<Cred> {
     let mut cred = gemini::exchange(http, code, verifier, redirect).await?;
-    if let Ok((tier, project)) = gemini::tier(http, &cred.access, "").await {
-        if cred.account.is_empty() || cred.account == "google" {
-            cred.account = tier;
-        }
-        if !project.is_empty() {
-            cred.project = project;
-        }
+    let (tier, project) = gemini::tier(http, &cred.access, "").await.context("activation Gemini Code Assist")?;
+    if cred.account.is_empty() || cred.account == "google" {
+        cred.account = tier;
     }
+    cred.project = project;
     Ok(cred)
 }
 

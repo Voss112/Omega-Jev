@@ -85,29 +85,124 @@ async fn email(http: &Client, access: &str) -> Option<String> {
     v["email"].as_str().map(str::to_owned)
 }
 
-/// Fields the Code Assist backend expects from an IDE plugin.
-fn metadata() -> Value {
-    json!({ "pluginType": "GEMINI", "ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED" })
+/// Metadata every Code Assist call expects; `duetProject` only when a project is known.
+fn metadata(project: &str) -> Value {
+    let mut m = json!({ "pluginType": "GEMINI", "ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED" });
+    if !project.is_empty() {
+        m["duetProject"] = json!(project);
+    }
+    m
 }
 
-/// `(tier id, Code Assist project)`: `loadCodeAssist`, then `onboardUser` when no project is attached.
+/// Project id from either shape the API uses: a string (`loadCodeAssist`) or `{id}` (onboarding operation).
+fn project_of(v: &Value) -> String {
+    let Some(project) = v.get("cloudaicompanionProject") else {
+        return String::new();
+    };
+    project.as_str().or_else(|| project["id"].as_str()).unwrap_or_default().to_owned()
+}
+
+/// `(tier id, requires a user project)`; mirrors the official CLI's default-tier selection.
+fn onboard_tier(v: &Value) -> (String, bool) {
+    if let Some(tier) = v["allowedTiers"].as_array().and_then(|tiers| tiers.iter().find(|t| t["isDefault"].as_bool() == Some(true))) {
+        let id = tier["id"].as_str().unwrap_or_default().to_owned();
+        let needs_project = tier["userDefinedCloudaicompanionProject"].as_bool() == Some(true);
+        return (id, needs_project);
+    }
+    ("legacy-tier".to_owned(), true)
+}
+
+/// Reason Google gives for an account that cannot use Code Assist, with its validation link when present.
+fn ineligible(v: &Value) -> Option<String> {
+    let tiers = v["ineligibleTiers"].as_array()?;
+    let tier = tiers.iter().find(|t| t["validationUrl"].as_str().is_some_and(|u| !u.is_empty())).or_else(|| tiers.first())?;
+    let reason = tier["reasonMessage"].as_str().filter(|s| !s.is_empty()).unwrap_or("compte inéligible à Gemini Code Assist");
+    Some(match tier["validationUrl"].as_str().filter(|u| !u.is_empty()) {
+        Some(url) => format!("{reason} — validez ce compte : {url}"),
+        None => reason.to_owned(),
+    })
+}
+
+/// Google sometimes blocks Code Assist until the account is validated (age, region, Workspace policy).
+fn validation_url(v: &Value) -> Option<String> {
+    v["ineligibleTiers"].as_array()?.iter().find_map(|tier| {
+        if tier["reasonCode"].as_str() != Some("VALIDATION_REQUIRED") {
+            return None;
+        }
+        tier["validationUrl"].as_str().filter(|u| !u.is_empty()).map(str::to_owned)
+    })
+}
+
+/// A Workspace/standard account may supply its project through the environment, like the official CLI.
+pub fn env_project() -> String {
+    ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok())
+        .map(|v| v.trim().to_owned())
+        .unwrap_or_default()
+}
+
+/// `(tier id, Code Assist project)`: mirrors the official CLI — `loadCodeAssist`, then `onboardUser`
+/// only when no tier is attached. Onboarding returns its project as `{id}`, not as a string.
 pub async fn tier(http: &Client, access: &str, project: &str) -> Result<(String, String)> {
-    // An empty `cloudaicompanionProject` is read as an unlicensed project: omit it until one is known.
-    let mut probe = json!({ "metadata": metadata() });
+    let project = if project.trim().is_empty() { env_project() } else { project.trim().to_owned() };
+    let mut probe = json!({ "metadata": metadata(&project) });
     if !project.is_empty() {
         probe["cloudaicompanionProject"] = json!(project);
     }
     let v = post(http, access, "loadCodeAssist", &probe).await.map_err(license_hint)?;
-    if let Some((tier, found)) = tier_of(&v)
-        && !found.is_empty()
-    {
-        return Ok((tier, found));
+
+    if let Some((tier, found)) = tier_of(&v) {
+        if !found.is_empty() {
+            return Ok((tier, found));
+        }
+        if !project.is_empty() {
+            return Ok((tier, project.clone()));
+        }
+        if let Some(message) = ineligible(&v) {
+            bail!("{message}");
+        }
+        bail!(
+            "Compte Gemini sans projet Code Assist : définissez GOOGLE_CLOUD_PROJECT, \
+             ou passez Gemini en « Clé API » dans ⚙ Paramètres."
+        );
     }
-    let tier_id = v["currentTier"]["id"].as_str().unwrap_or("free-tier").to_owned();
-    let onboard = json!({ "tierId": tier_id, "metadata": metadata() });
+
+    // Before onboarding, a validation link is the only actionable answer.
+    if let Some(url) = validation_url(&v) {
+        bail!("Google demande de valider ce compte avant Code Assist : {url} — validez, puis reconnectez-vous.");
+    }
+    let has_allowed = v["allowedTiers"].as_array().is_some();
+    let (tier_id, needs_project) = onboard_tier(&v);
+    if !has_allowed && project.is_empty() && let Some(message) = ineligible(&v) {
+        bail!("{message}");
+    }
+    let free = tier_id == "free-tier";
+    if !free && needs_project && project.is_empty() {
+        bail!("Cette offre Gemini exige un projet Google Cloud : définissez GOOGLE_CLOUD_PROJECT, puis reconnectez-vous.");
+    }
+
+    // The free tier manages its own project; sending one triggers "Precondition Failed".
+    let mut onboard = json!({ "tierId": tier_id, "metadata": if free { metadata("") } else { metadata(&project) } });
+    if !free && !project.is_empty() {
+        onboard["cloudaicompanionProject"] = json!(project);
+    }
     let op = post(http, access, "onboardUser", &onboard).await.map_err(license_hint)?;
+    if op["done"].as_bool() == Some(true) {
+        let found = project_of(&op["response"]);
+        if !found.is_empty() {
+            return Ok((tier_id, found));
+        }
+        if !project.is_empty() {
+            return Ok((tier_id, project));
+        }
+        bail!("Code Assist : activation terminée sans projet. Réessayez, ou passez Gemini en « Clé API ».");
+    }
     let Some(name) = op["name"].as_str().filter(|n| !n.is_empty()) else {
-        return Ok((tier_id, String::new()));
+        if !project.is_empty() {
+            return Ok((tier_id, project));
+        }
+        bail!("Code Assist : aucune opération d'activation renvoyée. Réessayez dans une minute.");
     };
     anyhow::ensure!(name.chars().all(|c| c.is_ascii_alphanumeric() || "/_-".contains(c)), "nom d'opération inattendu");
     for _ in 0..15 {
@@ -121,11 +216,17 @@ pub async fn tier(http: &Client, access: &str, project: &str) -> Result<(String,
             .context("suivi de l'activation Code Assist")?;
         let v: Value = res.json().await.unwrap_or(Value::Null);
         if v["done"].as_bool() == Some(true) {
-            let project = v["response"]["cloudaicompanionProject"].as_str().unwrap_or_default().to_owned();
-            return Ok((tier_id, project));
+            let found = project_of(&v["response"]);
+            if !found.is_empty() {
+                return Ok((tier_id, found));
+            }
+            if !project.is_empty() {
+                return Ok((tier_id, project));
+            }
+            bail!("Code Assist : activation terminée sans projet. Réessayez, ou passez Gemini en « Clé API ».");
         }
     }
-    Ok((tier_id, String::new()))
+    bail!("Code Assist : activation toujours en cours (30 s). Réessayez dans une minute.")
 }
 
 /// #3501: the Google account has no Gemini Code Assist licence — say what to do instead of quoting the API.
@@ -148,7 +249,7 @@ pub fn hint(body: &str) -> Option<String> {
 
 pub fn tier_of(v: &Value) -> Option<(String, String)> {
     let tier = v["currentTier"]["id"].as_str()?.to_owned();
-    Some((tier, v["cloudaicompanionProject"].as_str().unwrap_or_default().to_owned()))
+    Some((tier, project_of(v)))
 }
 
 async fn post(http: &Client, access: &str, method: &str, body: &Value) -> Result<Value> {
@@ -222,7 +323,39 @@ mod tests {
 
     #[test]
     fn code_assist_metadata_names_the_ide_plugin() {
-        let m = metadata();
+        let m = metadata("");
         assert_eq!((m["pluginType"].as_str(), m["ideType"].as_str()), (Some("GEMINI"), Some("IDE_UNSPECIFIED")));
+        assert!(m.get("duetProject").is_none());
+        assert_eq!(metadata("proj-1")["duetProject"], "proj-1");
+    }
+
+    #[test]
+    fn an_onboarded_project_is_read_from_its_object() {
+        let op = json!({ "response": { "cloudaicompanionProject": { "id": "proj-7", "name": "Code Assist" } } });
+        assert_eq!(project_of(&op["response"]), "proj-7");
+        assert_eq!(project_of(&json!({ "cloudaicompanionProject": "proj-8" })), "proj-8");
+        assert_eq!(project_of(&json!({})), "");
+    }
+
+    #[test]
+    fn the_default_allowed_tier_drives_onboarding() {
+        let v = json!({ "allowedTiers": [
+            { "id": "free-tier", "isDefault": false },
+            { "id": "standard-tier", "isDefault": true, "userDefinedCloudaicompanionProject": true }
+        ] });
+        assert_eq!(onboard_tier(&v), ("standard-tier".to_owned(), true));
+        assert_eq!(onboard_tier(&json!({})), ("legacy-tier".to_owned(), true));
+    }
+
+    #[test]
+    fn an_ineligible_account_yields_its_reason_and_validation_url() {
+        let v = json!({ "ineligibleTiers": [{
+            "reasonCode": "VALIDATION_REQUIRED",
+            "reasonMessage": "validation requise",
+            "validationUrl": "https://example.test/verify"
+        }] });
+        assert_eq!(validation_url(&v).as_deref(), Some("https://example.test/verify"));
+        let message = ineligible(&v).unwrap();
+        assert!(message.contains("validation requise") && message.contains("https://example.test/verify"));
     }
 }

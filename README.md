@@ -37,7 +37,7 @@ Pick the provider, the exact model and the effort level right in the input box. 
 
 ### Windows (recommended)
 
-1. Download **`Omega-0.9.1-x64.msi`** from the [latest release](https://github.com/Voss112/Anonymous/releases/latest).
+1. Download **`Omega-0.9.2-x64.msi`** from the [latest release](https://github.com/Voss112/Anonymous/releases/latest).
 2. Double-click it. The install is per-user: no admin rights needed, and a Desktop shortcut is created.
 3. On first launch, **⚙ Settings** opens. Paste your **DeepSeek** key ([platform.deepseek.com](https://platform.deepseek.com)) and your **Jev** key ([console.typesafe.ai](https://console.typesafe.ai)). Without a Jev key, a local router takes over.
 4. Claude and Gemini connect through the **Sign in** button (subscription) or an API key.

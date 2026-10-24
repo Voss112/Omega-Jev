@@ -28,6 +28,39 @@ pub fn binary() -> Option<PathBuf> {
     })
 }
 
+/// Runs Google's installer without a window (it only downloads and checks `agy.exe`), then finds the binary.
+pub async fn install() -> Result<PathBuf> {
+    if let Some(bin) = binary() {
+        return Ok(bin);
+    }
+    let mut cmd = process::shell(INSTALL);
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let out = tokio::time::timeout(Duration::from_secs(300), cmd.output())
+        .await
+        .context("installation d'Antigravity : délai de 5 min dépassé")?
+        .context("installation d'Antigravity")?;
+    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    binary().with_context(|| format!("agy introuvable après l'installation : {}", log.trim().chars().take(400).collect::<String>()))
+}
+
+/// A visible console running `agy`: first run opens the Google sign-in page; `/quit` closes the session.
+pub fn open_login(bin: &Path) -> Result<()> {
+    let script = format!(
+        "Write-Host 'Antigravity : connectez-vous dans la page Google, puis tapez /quit et fermez cette fenetre.'; & '{}'",
+        bin.display().to_string().replace('\'', "''")
+    );
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", &script]);
+    #[cfg(windows)]
+    {
+        // A console of its own: Omega is a GUI process and has none to share.
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        std::os::windows::process::CommandExt::creation_flags(&mut cmd, CREATE_NEW_CONSOLE);
+    }
+    cmd.spawn().context("ouverture de la console Antigravity")?;
+    Ok(())
+}
+
 /// The conversation as one prompt: agy keeps its own agent prompt, Omega's instructions travel as text.
 pub fn prompt(messages: &[Value]) -> String {
     let mut out = String::from(
@@ -89,8 +122,14 @@ pub async fn models(bin: &Path) -> Result<Vec<String>> {
         "agy models a échoué ({}) — lancez `agy` une fois dans un terminal pour vous connecter",
         String::from_utf8_lossy(&out.stderr).trim()
     );
+    // Not signed in: agy says so and still exits 0.
+    if format!("{text}{}", String::from_utf8_lossy(&out.stderr)).to_lowercase().contains("sign in") {
+        bail!("Antigravity : connexion requise — ⚙ Paramètres → Gemini → « Se connecter à Antigravity »");
+    }
     let list = parse_models(&text);
-    let _ = CACHE.set(list.clone());
+    if !list.is_empty() {
+        let _ = CACHE.set(list.clone());
+    }
     Ok(list)
 }
 

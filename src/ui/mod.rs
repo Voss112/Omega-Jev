@@ -111,6 +111,8 @@ pub struct App {
     login_task: Option<JoinHandle<()>>,
     /// GitHub token typed by the user (`ghp_…`, `github_pat_…`).
     github_draft: String,
+    /// The Antigravity installer is running.
+    agy_installing: bool,
     /// Long-lived Claude token typed by the user (`claude setup-token`).
     token_draft: String,
     /// Last fetched plan usage per subscription.
@@ -186,6 +188,7 @@ impl App {
             login: None,
             login_task: None,
             github_draft: String::new(),
+            agy_installing: false,
             token_draft: String::new(),
             plan_usage: HashMap::new(),
             accounts: HashMap::new(),
@@ -213,6 +216,13 @@ impl App {
             app.notify(n);
         }
         app.reload_accounts();
+        // Gemini on a personal plan needs the Antigravity CLI: installed by default, then the sign-in console opens.
+        let s = &app.settings;
+        let wants_agy = s.gemini_auth == crate::domain::auth::AuthMode::Subscription
+            && (s.engine == Engine::Gemini || (s.delegate && s.delegate_gemini));
+        if wants_agy && crate::infra::llm::agy::binary().is_none() {
+            app.install_agy(true);
+        }
         let connected: Vec<Provider> = Provider::ENGINES.into_iter().filter(|p| app.accounts.contains_key(p)).collect();
         for provider in connected {
             app.fetch_plan_usage(provider);

@@ -175,6 +175,11 @@ pub enum Event {
         conv: Uuid,
         error: Option<String>,
     },
+    /// The Antigravity CLI finished installing (path) or failed; `login` opens its sign-in console next.
+    AgyInstalled {
+        result: Result<String, String>,
+        login: bool,
+    },
     /// GitHub device flow: the code to type on the verification page.
     DeviceCode {
         code: String,

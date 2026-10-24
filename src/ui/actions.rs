@@ -306,18 +306,45 @@ impl App {
         });
     }
 
-    /// Google's installer, then a first `agy` run (browser sign-in), in a terminal the user sees.
-    pub(super) fn install_agy(&mut self) {
-        let script = format!(
-            r#"{}; Write-Host ''; Write-Host 'Connexion : une page Google va s''ouvrir. Une fois connecte, tapez /quit puis fermez cette fenetre.'; & "$env:LOCALAPPDATA\agy\bin\agy.exe""#,
-            crate::infra::llm::agy::INSTALL
-        );
-        let started = std::process::Command::new("cmd")
-            .args(["/c", "start", "Antigravity", "powershell", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", &script])
-            .spawn();
-        match started {
-            Ok(_) => self.notify("Installation d'Antigravity lancée — après la connexion, rouvrez ⚙ Paramètres et Enregistrez"),
-            Err(e) => self.notify(format!("Installation impossible : {e}")),
+    /// Installs the Antigravity CLI in the background (Google's installer, no window); `login` then opens the
+    /// sign-in console.
+    pub(super) fn install_agy(&mut self, login: bool) {
+        if self.agy_installing {
+            return;
+        }
+        self.agy_installing = true;
+        self.notify("Installation d'Antigravity (agy) en arrière-plan…");
+        let emit = self.emit.clone();
+        self.spawn(async move {
+            let result = crate::infra::llm::agy::install().await.map(|p| p.display().to_string()).map_err(|e| format!("{e:#}"));
+            emit.send(Event::AgyInstalled { result, login });
+        });
+    }
+
+    pub(super) fn agy_installed(&mut self, result: Result<String, String>, login: bool) {
+        self.agy_installing = false;
+        match result {
+            Ok(path) => {
+                // The environment re-detects agy: Gemini now runs through it.
+                self.apply_settings(self.settings.clone());
+                if login {
+                    self.agy_login();
+                } else {
+                    self.notify(format!("Antigravity installé : {path}"));
+                }
+            }
+            Err(e) => self.notify(format!("Antigravity non installé : {e}")),
+        }
+    }
+
+    /// Opens `agy` in a console for the Google sign-in.
+    pub(super) fn agy_login(&mut self) {
+        let opened = crate::infra::llm::agy::binary()
+            .ok_or_else(|| anyhow::anyhow!("agy n'est pas installé"))
+            .and_then(|bin| crate::infra::llm::agy::open_login(&bin));
+        match opened {
+            Ok(()) => self.notify("Antigravity : connectez-vous dans la page Google, puis /quit dans la console"),
+            Err(e) => self.notify(format!("Antigravity : {e:#}")),
         }
     }
 

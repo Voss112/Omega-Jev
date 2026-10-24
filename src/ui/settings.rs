@@ -35,6 +35,7 @@ enum SubAction {
     GitHubToken,
     Disconnect(Provider),
     InstallAgy,
+    AgyLogin,
 }
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
@@ -111,7 +112,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         Some(SubAction::UseToken) => app.use_token(),
         Some(SubAction::GitHubToken) => app.use_github_token(),
         Some(SubAction::Disconnect(provider)) => app.disconnect(provider),
-        Some(SubAction::InstallAgy) => app.install_agy(),
+        Some(SubAction::InstallAgy) => app.install_agy(true),
+        Some(SubAction::AgyLogin) => app.agy_login(),
         None => {}
     }
 }
@@ -164,9 +166,15 @@ fn form(
                     ui.horizontal_wrapped(|ui| match crate::infra::llm::agy::binary() {
                         Some(_) => {
                             widgets::chip_icon(ui, Some(Icon::Check), "agy installé · abonnement Pro/Ultra (texte)", GREEN);
+                            if widgets::pill(ui, Some(Icon::Globe), "Se connecter à Antigravity", SOFT, false)
+                                .on_hover_text("Ouvre agy dans une console : connexion Google, puis /quit")
+                                .clicked()
+                            {
+                                sub = Some(SubAction::AgyLogin);
+                            }
                         }
                         None => {
-                            if widgets::pill(ui, Some(Icon::Download), "Installer Antigravity (agy) et se connecter", SOFT, false)
+                            if widgets::pill(ui, Some(Icon::Download), "Installer Antigravity (agy)", SOFT, false)
                                 .on_hover_text("Google réserve désormais les abonnements personnels à l'Antigravity CLI")
                                 .clicked()
                             {

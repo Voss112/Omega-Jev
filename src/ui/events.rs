@@ -93,6 +93,7 @@ impl App {
                 Event::PlanUsage { provider, windows } => {
                     self.plan_usage.insert(provider, (windows, Instant::now()));
                 }
+                Event::AgyInstalled { result, login } => self.agy_installed(result, login),
                 Event::DeviceCode { code, url } => {
                     if let Some(login) = self.login.as_mut().filter(|l| l.provider == crate::domain::auth::Provider::GitHub) {
                         login.user_code = code;

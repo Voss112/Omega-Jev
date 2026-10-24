@@ -5,6 +5,7 @@ use eframe::egui::{self, Align, FontId, Id, Layout, Margin, Modal, RichText, Scr
 
 use super::{
     App,
+    i18n::tr,
     composer::{effort_label, engine_short},
     icons::{self, Icon},
     theme::{AMBER, EDGE, FAINT, MUTED, RED, TEXT},
@@ -69,8 +70,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             cancel |= widgets::modal_header(
                 ui,
                 Icon::Clock,
-                "Programmer un prompt",
-                "Omega envoie le prompt à l'heure dite, avec le moteur et l'effort choisis, toujours en mode Bypass.",
+                tr("Programmer un prompt", "Schedule a prompt"),
+                tr("Omega envoie le prompt à l'heure dite, avec le moteur et l'effort choisis, toujours en mode Bypass.", "Omega sends the prompt at the set time, with the chosen engine and effort, always in Bypass mode."),
             );
             ui.add_space(16.0);
             field_label(ui, "Prompt");
@@ -79,19 +80,19 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     .desired_rows(3)
                     .desired_width(f32::INFINITY)
                     .margin(Margin::symmetric(12, 10))
-                    .hint_text("Ce que Omega doit faire à l'heure prévue…"),
+                    .hint_text(tr("Ce que Omega doit faire à l'heure prévue…", "What Omega should do at the set time…")),
             );
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                field(ui, "Jour", |ui| {
+                field(ui, tr("Jour", "Day"), |ui| {
                     ui.add(
                         TextEdit::singleline(&mut draft.date)
                             .desired_width(120.0)
                             .margin(Margin::symmetric(10, 6))
-                            .hint_text("AAAA-MM-JJ"),
+                            .hint_text(tr("AAAA-MM-JJ", "YYYY-MM-DD")),
                     );
                 });
-                field(ui, "Heure", |ui| {
+                field(ui, tr("Heure", "Time"), |ui| {
                     ui.add(
                         TextEdit::singleline(&mut draft.time)
                             .desired_width(80.0)
@@ -99,12 +100,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             .hint_text("HH:MM"),
                     );
                 });
-                field(ui, "Répétition", |ui| {
-                    widgets::toggle(ui, &mut draft.daily, "chaque jour");
+                field(ui, tr("Répétition", "Repeat"), |ui| {
+                    widgets::toggle(ui, &mut draft.daily, tr("chaque jour", "every day"));
                 });
             });
             ui.add_space(12.0);
-            field_label(ui, "Moteur");
+            field_label(ui, tr("Moteur", "Engine"));
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                 let previous = draft.engine;
@@ -142,9 +143,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 });
             });
             ui.add_space(8.0);
-            widgets::chip_icon(ui, Some(Icon::Unlock), "Bypass forcé", AMBER);
+            widgets::chip_icon(ui, Some(Icon::Unlock), tr("Bypass forcé", "Bypass forced"), AMBER);
             if app.jobs.iter().any(Job::pending) {
-                widgets::form_section(ui, Icon::Clock, "Programmés");
+                widgets::form_section(ui, Icon::Clock, tr("Programmés", "Scheduled"));
                 ScrollArea::vertical().max_height(170.0).show(ui, |ui| {
                     for (i, job) in app.jobs.iter().enumerate().filter(|(_, j)| j.pending()) {
                         widgets::card(ui, EDGE, |ui| {
@@ -157,7 +158,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                     widgets::truncated(ui, &short(&job.prompt), FontId::proportional(11.5), FAINT);
                                 });
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if widgets::icon_button(ui, Icon::Trash, "Supprimer").clicked() {
+                                    if widgets::icon_button(ui, Icon::Trash, tr("Supprimer", "Delete")).clicked() {
                                         remove = Some(i);
                                     }
                                 });
@@ -178,10 +179,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             ui.add_space(16.0);
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if widgets::primary_icon(ui, Some(Icon::Clock), "Programmer", 150.0).clicked() {
+                    if widgets::primary_icon(ui, Some(Icon::Clock), tr("Programmer", "Schedule"), 150.0).clicked() {
                         plan = true;
                     }
-                    if widgets::ghost(ui, "Annuler").clicked() {
+                    if widgets::ghost(ui, tr("Annuler", "Cancel")).clicked() {
                         cancel = true;
                     }
                 });
@@ -198,7 +199,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if plan {
         let result = parse_when(&draft.date, &draft.time);
         match result {
-            Ok(_) if draft.prompt.trim().is_empty() => app.schedule_error = Some("prompt vide".to_owned()),
+            Ok(_) if draft.prompt.trim().is_empty() => app.schedule_error = Some(tr("prompt vide", "empty prompt").to_owned()),
             Ok(at) => {
                 app.schedule_error = None;
                 let mut job =
@@ -209,11 +210,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         job.id = old.id;
                         job.runs = std::mem::take(&mut old.runs);
                         *old = job;
-                        app.notify("Tâche modifiée");
+                        app.notify(tr("Tâche modifiée", "Task updated"));
                     }
                     None => {
                         app.jobs.push(job);
-                        app.notify("Prompt programmé — Omega doit rester ouvert");
+                        app.notify(tr("Prompt programmé — Omega doit rester ouvert", "Prompt scheduled — Omega must stay open"));
                     }
                 }
                 app.persist_jobs();

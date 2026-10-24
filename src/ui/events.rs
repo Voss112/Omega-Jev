@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use super::App;
+use super::{App, i18n::tr};
 use crate::app::Event;
 
 impl App {
@@ -35,7 +35,7 @@ impl App {
                 }
                 Event::Terminal(out) => self.terminal.finished(&out),
                 Event::UpdateReady(path) => {
-                    self.notify("Mise à jour téléchargée : installée à la fermeture d'Omega");
+                    self.notify(tr("Mise à jour téléchargée : installée à la fermeture d'Omega", "Update downloaded: installed when Omega closes"));
                     self.update = Some(path);
                 }
                 Event::Message { conv, msg } => {
@@ -116,7 +116,7 @@ impl App {
                     if let Some(login) = self.login.as_mut().filter(|l| l.provider == crate::domain::auth::Provider::GitHub) {
                         login.user_code = code;
                         login.url = url;
-                        login.status = "En attente de la validation sur github.com…".to_owned();
+                        login.status = tr("En attente de la validation sur github.com…", "Waiting for approval on github.com…").to_owned();
                     }
                 }
                 Event::Models { engine, result } => match result {

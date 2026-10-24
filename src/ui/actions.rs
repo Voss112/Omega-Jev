@@ -4,7 +4,10 @@ use std::{fmt::Write as _, sync::Arc, time::Duration};
 
 use uuid::Uuid;
 
-use super::{App, Live, attach, build_env};
+use super::{
+    App, Live, attach, build_env,
+    i18n::{english, tr},
+};
 use crate::{
     app::{Env, Event, agent, health, prompts},
     domain::{
@@ -57,6 +60,7 @@ impl App {
         self.stop(id);
         self.convs.retain(|c| c.id != id);
         self.errors.remove(&id);
+        self.queue.remove(&id);
         let _ = store::delete_conversation(id);
         if self.current == Some(id) {
             self.current = self.convs.first().map(|c| c.id);
@@ -89,7 +93,7 @@ impl App {
     pub(super) fn vpn_blocks(&mut self) -> bool {
         let blocked = self.settings.require_vpn && !self.vpn.as_ref().is_some_and(|v| v.active);
         if blocked {
-            self.notify("Kill-switch VPN : aucun VPN détecté, envoi bloqué.");
+            self.notify(tr("Kill-switch VPN : aucun VPN détecté, envoi bloqué.", "VPN kill-switch: no VPN detected, sending blocked."));
         }
         blocked
     }
@@ -98,8 +102,12 @@ impl App {
     pub(super) fn submit(&mut self, target: Option<Uuid>, text: String, images: Vec<crate::domain::chat::Image>) {
         if !images.is_empty() && !self.settings.engine.vision() {
             self.notify(format!(
-                "{} ne lit pas les images : elles restent locales (utilisez Claude pour les montrer).",
-                self.settings.engine.label()
+                "{} {}",
+                self.settings.engine.label(),
+                tr(
+                    "ne lit pas les images : elles restent locales (utilisez Claude pour les montrer).",
+                    "cannot read images: they stay local (use Claude to show them).",
+                )
             ));
         }
         let id = if let Some(id) = target.or(self.current) {
@@ -131,12 +139,12 @@ impl App {
             // Like Claude Code: a fresh, empty context. The previous conversation stays in the history.
             "/clear" | "/new" => {
                 if self.busy() {
-                    self.notify("Arrêtez le tour en cours avant /clear");
+                    self.notify(tr("Arrêtez le tour en cours avant /clear", "Stop the running turn before /clear"));
                     return true;
                 }
                 self.new_chat();
                 self.shots.clear();
-                self.notify("Contexte vidé : nouvelle discussion (l'ancienne reste dans l'historique)");
+                self.notify(tr("Contexte vidé : nouvelle discussion (l'ancienne reste dans l'historique)", "Context cleared: new chat (the old one stays in the history)"));
                 true
             }
             "/tasks" | "/taches" | "/tâches" => {
@@ -204,12 +212,12 @@ impl App {
                     m.checkpoint = false;
                 }
                 Err(e) => {
-                    failure = Some(format!("Restauration incomplète : {e:#}"));
+                    failure = Some(format!("{} : {e:#}", tr("Restauration incomplète", "Incomplete restore")));
                     break;
                 }
             }
         }
-        if let Some(text) = failure.or_else(|| (restored > 0).then(|| format!("↶ {restored} fichier(s) restauré(s)"))) {
+        if let Some(text) = failure.or_else(|| (restored > 0).then(|| format!("↶ {restored} {}", tr("fichier(s) restauré(s)", "file(s) restored")))) {
             self.notify(text);
         }
         self.save(id);
@@ -225,8 +233,8 @@ impl App {
             return;
         };
         let text = match std::fs::write(&path, markdown(conv)) {
-            Ok(()) => format!("Exporté : {}", path.display()),
-            Err(e) => format!("Export impossible : {e}"),
+            Ok(()) => format!("{} : {}", tr("Exporté", "Exported"), path.display()),
+            Err(e) => format!("{} : {e}", tr("Export impossible", "Export failed")),
         };
         self.notify(text);
     }
@@ -258,7 +266,7 @@ impl App {
 
     pub(super) fn apply_settings(&mut self, settings: Settings) {
         if let Err(e) = store::save_settings(&settings) {
-            self.notify(format!("Paramètres non enregistrés : {e:#}"));
+            self.notify(format!("{} : {e:#}", tr("Paramètres non enregistrés", "Settings not saved")));
         }
         let (env, notice) = build_env(&settings, &self.web, &self.env.inbox);
         // Engine, effort or bypass switches do not re-run the network self-tests (token refreshes, paid probes).
@@ -269,10 +277,12 @@ impl App {
             crate::tools::livetest::stop_all();
         }
         let updates = !self.settings.auto_update && settings.auto_update;
+        // Texts built by the runtime (self-tests, quota labels) are re-read in the new language.
+        let relabel = self.settings.ui_lang != settings.ui_lang;
         if settings.autostart != self.settings.autostart
             && let Err(e) = crate::infra::autostart::apply(settings.autostart)
         {
-            self.notify(format!("Démarrage avec Windows : {e:#}"));
+            self.notify(format!("{} : {e:#}", tr("Démarrage avec Windows", "Start with Windows")));
         }
         self.settings = settings;
         super::i18n::set(self.settings.ui_lang);
@@ -284,8 +294,11 @@ impl App {
         if let Some(n) = notice {
             self.notify(n);
         }
-        if probes {
+        if probes || relabel {
             self.refresh_health();
+        }
+        if relabel {
+            self.usage_polled.clear();
         }
         if vpn {
             self.restart_vpn();
@@ -348,7 +361,7 @@ impl App {
             return;
         }
         self.agy_installing = true;
-        self.notify("Installation d'Antigravity (agy) en arrière-plan…");
+        self.notify(tr("Installation d'Antigravity (agy) en arrière-plan…", "Installing Antigravity (agy) in the background…"));
         let emit = self.emit.clone();
         self.spawn(async move {
             let result = crate::infra::llm::agy::install().await.map(|p| p.display().to_string()).map_err(|e| format!("{e:#}"));
@@ -365,10 +378,10 @@ impl App {
                 if login {
                     self.agy_login();
                 } else {
-                    self.notify(format!("Antigravity installé : {path}"));
+                    self.notify(format!("{} : {path}", tr("Antigravity installé", "Antigravity installed")));
                 }
             }
-            Err(e) => self.notify(format!("Antigravity non installé : {e}")),
+            Err(e) => self.notify(format!("{} : {e}", tr("Antigravity non installé", "Antigravity not installed"))),
         }
     }
 
@@ -378,7 +391,7 @@ impl App {
             .ok_or_else(|| anyhow::anyhow!("agy n'est pas installé"))
             .and_then(|bin| crate::infra::llm::agy::open_login(&bin));
         match opened {
-            Ok(()) => self.notify("Antigravity : connectez-vous dans la page Google, puis /quit dans la console"),
+            Ok(()) => self.notify(tr("Antigravity : connectez-vous dans la page Google, puis /quit dans la console", "Antigravity: sign in on the Google page, then /quit in the console")),
             Err(e) => self.notify(format!("Antigravity : {e:#}")),
         }
     }
@@ -390,9 +403,9 @@ impl App {
                 self.plan_usage.remove(&provider);
                 // The environment re-reads the credentials: a removed token stops reaching requests and shells.
                 self.apply_settings(self.settings.clone());
-                self.notify(format!("{} déconnecté", provider.label()));
+                self.notify(format!("{} {}", provider.label(), tr("déconnecté", "disconnected")));
             }
-            Err(e) => self.notify(format!("Déconnexion impossible : {e:#}")),
+            Err(e) => self.notify(format!("{} : {e:#}", tr("Déconnexion impossible", "Cannot disconnect"))),
         }
     }
 
@@ -403,7 +416,7 @@ impl App {
             return;
         }
         login.submitting = true;
-        login.status = "Validation…".to_owned();
+        login.status = tr("Validation…", "Checking…").to_owned();
         self.login = Some(login.clone());
         let (env, emit, provider) = (self.env.clone(), self.emit.clone(), login.provider);
         self.spawn(async move {
@@ -438,7 +451,7 @@ impl App {
         match result {
             Ok(cred) => {
                 if let Err(e) = crate::app::login::persist(provider, &cred) {
-                    self.notify(format!("Jetons non enregistrés : {e:#}"));
+                    self.notify(format!("{} : {e:#}", tr("Jetons non enregistrés", "Tokens not saved")));
                     return;
                 }
                 let subscribe = |s: &mut Settings| match provider {
@@ -465,10 +478,10 @@ impl App {
                 self.cancel_login();
                 let account = if cred.account.is_empty() { provider.label().to_owned() } else { cred.account.clone() };
                 let note = match provider {
-                    Provider::Gemini if self.settings.engine != Engine::Gemini => " — délégation active, moteur sélectionnable",
+                    Provider::Gemini if self.settings.engine != Engine::Gemini => tr(" — délégation active, moteur sélectionnable", " — delegation on, engine selectable"),
                     _ => "",
                 };
-                self.notify(format!("{} connecté · {account}{note}", provider.label()));
+                self.notify(format!("{} {} · {account}{note}", provider.label(), tr("connecté", "connected")));
                 self.fetch_plan_usage(provider);
             }
             Err(e) => {
@@ -486,6 +499,14 @@ impl App {
     pub(super) fn fetch_plan_usage(&mut self, provider: Provider) {
         let (env, emit) = (self.env.clone(), self.emit.clone());
         let _task = self.spawn(async move {
+            // Personal Gemini plans run through Antigravity: its sign-in carries the quota, not Code Assist's (403).
+            if provider == Provider::Gemini
+                && let Some(bin) = crate::infra::llm::agy::binary()
+                && let Some(windows) = crate::infra::llm::agy::usage(&env.http, &bin).await
+            {
+                emit.send(Event::PlanUsage { provider, windows });
+                return;
+            }
             let Some(auth) = crate::infra::auth::Auth::load(provider) else { return };
             let Ok(token) = auth.fresh(&env.http).await else { return };
             let windows = match provider {
@@ -500,7 +521,7 @@ impl App {
     }
 
     pub(super) fn pick_workspace(&mut self) {
-        if let Some(dir) = rfd::FileDialog::new().set_title("Dossier de travail").pick_folder() {
+        if let Some(dir) = rfd::FileDialog::new().set_title(tr("Dossier de travail", "Workspace")).pick_folder() {
             let settings = Settings { workspace: Some(dir), ..self.settings.clone() };
             self.apply_settings(settings);
         }
@@ -516,11 +537,11 @@ impl App {
             .and_then(|mut f| std::io::Write::write_all(&mut f, RULES_TEMPLATE.as_bytes()));
         match result {
             Ok(()) => {
-                self.notify(format!("Créé : {} — complétez-le", path.display()));
+                self.notify(if english() { format!("Created: {} — fill it in", path.display()) } else { format!("Créé : {} — complétez-le", path.display()) });
                 let _ = open::that(&path);
                 self.refresh_health();
             }
-            Err(e) => self.notify(format!("Création impossible : {e}")),
+            Err(e) => self.notify(format!("{} : {e}", tr("Création impossible", "Cannot create"))),
         }
     }
 
@@ -545,7 +566,7 @@ impl App {
             let result = if llm.configured() {
                 llm.catalog().await.map_err(|e| format!("{e:#}"))
             } else {
-                Err("aucun identifiant connecté".to_owned())
+                Err(tr("aucun identifiant connecté", "no account connected").to_owned())
             };
             emit.send(Event::Models { engine, result });
         });
@@ -554,7 +575,7 @@ impl App {
     /// Adds a screenshot to the composer, with a hard cap.
     pub(super) fn attach(&mut self, img: crate::domain::chat::Image) {
         if self.shots.len() >= attach::MAX_IMAGES {
-            self.notify(format!("{} images maximum par message", attach::MAX_IMAGES));
+            self.notify(format!("{} {}", attach::MAX_IMAGES, tr("images maximum par message", "images max per message")));
             return;
         }
         self.shots.push(img);
@@ -581,6 +602,13 @@ impl App {
             .filter_map(|p| Some((p, crate::infra::auth::Auth::load(p)?.account())))
             .filter(|(_, account)| !account.is_empty())
             .collect();
+        // Signed in to Antigravity only: Gemini is still connected through agy.
+        if !self.accounts.contains_key(&Provider::Gemini)
+            && crate::infra::llm::agy::binary().is_some()
+            && let Some(s) = crate::infra::llm::agy::session().filter(|s| !s.email.is_empty())
+        {
+            self.accounts.insert(Provider::Gemini, s.email);
+        }
     }
 
     /// While the user types, the engine and Jev connections open (and a subscription token refreshes) ahead of the send.
@@ -637,7 +665,7 @@ impl App {
 
     pub(super) fn persist_jobs(&mut self) {
         if let Err(e) = crate::infra::store::save_jobs(&self.jobs) {
-            self.notify(format!("Programmation non enregistrée : {e:#}"));
+            self.notify(format!("{} : {e:#}", tr("Programmation non enregistrée", "Schedule not saved")));
         }
     }
 
@@ -687,7 +715,7 @@ impl App {
     /// the user's settings, draft, images and open conversation are left untouched. Returns the conversation.
     fn start_job(&mut self, job: &Job) -> Option<Uuid> {
         if self.settings.require_vpn && !self.vpn.as_ref().is_some_and(|v| v.active) {
-            self.notify("Kill-switch VPN : tâche programmée non lancée (aucun VPN détecté) — mise en pause.");
+            self.notify(tr("Kill-switch VPN : tâche programmée non lancée (aucun VPN détecté) — mise en pause.", "VPN kill-switch: scheduled task not started (no VPN detected) — paused."));
             return None;
         }
         let mut settings = self.settings.clone();
@@ -704,7 +732,7 @@ impl App {
         conv.push(Message::user(job.prompt.clone()));
         self.convs.insert(0, conv);
         self.launch_with(id, env);
-        self.notify("Tâche programmée lancée (bypass)");
+        self.notify(tr("Tâche programmée lancée (bypass)", "Scheduled task started (bypass)"));
         Some(id)
     }
 }

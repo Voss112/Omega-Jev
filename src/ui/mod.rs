@@ -36,6 +36,9 @@ mod update;
 mod widgets;
 mod window;
 
+/// Interface language, also read by the runtime for the messages it shows.
+pub(crate) use i18n::{english, tr};
+
 use std::{
     collections::HashMap,
     sync::{Arc, mpsc},
@@ -320,7 +323,7 @@ impl App {
         if let Some(conv) = self.conv(id)
             && let Err(e) = store::save_conversation(conv)
         {
-            self.notify(format!("Sauvegarde impossible : {e:#}"));
+            self.notify(format!("{} : {e:#}", i18n::tr("Sauvegarde impossible", "Cannot save")));
         }
     }
 
@@ -370,7 +373,7 @@ fn build_env(settings: &Settings, web: &Arc<WebIndex>, inbox: &Inbox) -> (Arc<En
         Err(e) => {
             let fallback = Settings { proxy: String::new(), ..settings.clone() };
             let env = Env::new(fallback, web.clone()).expect("client HTTP sans proxy");
-            (env, Some(format!("Proxy ignoré : {e:#}")))
+            (env, Some(format!("{} : {e:#}", i18n::tr("Proxy ignoré", "Proxy ignored"))))
         }
     };
     env.inbox = inbox.clone();

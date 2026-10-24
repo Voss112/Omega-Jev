@@ -266,9 +266,12 @@ fn hints(ui: &mut Ui, style: &str) {
 fn bypass_toggle(app: &mut App, ui: &mut Ui, t: f64) {
     let on = app.settings.bypass;
     let tip = if on {
-        "Bypass actif : commandes, installations et modifications sont acceptées sans demander (les commandes destructrices restent bloquées). Cliquer pour revenir aux demandes."
+        tr(
+            "Bypass actif : commandes, installations et modifications sont acceptées sans demander (les commandes destructrices restent bloquées). Cliquer pour revenir aux demandes.",
+            "Bypass on: commands, installs and edits are accepted without asking (destructive commands stay blocked). Click to ask again.",
+        )
     } else {
-        "Cliquer pour accepter automatiquement toutes les autorisations (mode Bypass)."
+        tr("Cliquer pour accepter automatiquement toutes les autorisations (mode Bypass).", "Click to accept every permission automatically (Bypass mode).")
     };
     let resp = if on {
         let galley = widgets::line(ui, "Bypass", FontId::proportional(13.0), RED, 200.0);
@@ -299,7 +302,7 @@ fn engine_picker(app: &mut App, ui: &mut Ui) {
             }
         }
     });
-    resp.on_hover_text("Fournisseur qui exécute (System Two). Jev choisit toujours skill, outils et playbook.");
+    resp.on_hover_text(tr("Fournisseur qui exécute (System Two). Jev choisit toujours skill, outils et playbook.", "Provider that executes (System Two). Jev always picks the skill, tools and playbook."));
     if engine != app.settings.engine {
         let mut settings = app.settings.clone();
         settings.engine = engine;
@@ -320,6 +323,8 @@ fn model_picker(app: &mut App, ui: &mut Ui) {
     let fetched = app.catalog.get(&engine).map_or(&[][..], Vec::as_slice);
     let choices = models::choices(engine, &current, fetched);
     let tip = match app.catalog_error.get(&engine) {
+        Some(e) if super::i18n::english() => format!("Model sent to the API: {current}\nAccount list unavailable: {e}"),
+        None if super::i18n::english() => format!("Model sent to the API: {current}\n{} model(s) known for this account", fetched.len()),
         Some(e) => format!("Modèle envoyé à l'API : {current}\nListe du compte indisponible : {e}"),
         None => format!("Modèle envoyé à l'API : {current}\n{} modèle(s) connu(s) pour ce compte", fetched.len()),
     };
@@ -332,7 +337,7 @@ fn model_picker(app: &mut App, ui: &mut Ui) {
             }
         }
         ui.separator();
-        if widgets::menu_item(ui, app.model_input.is_some(), "Autre identifiant…").clicked() {
+        if widgets::menu_item(ui, app.model_input.is_some(), tr("Autre identifiant…", "Other id…")).clicked() {
             custom = true;
         }
     });
@@ -343,7 +348,7 @@ fn model_picker(app: &mut App, ui: &mut Ui) {
     if picked != current && !picked.trim().is_empty() {
         pick_model(app, &picked);
     }
-    if widgets::icon_button(ui, Icon::Refresh, "Récupérer la liste des modèles de ce compte").clicked() {
+    if widgets::icon_button(ui, Icon::Refresh, tr("Récupérer la liste des modèles de ce compte", "Fetch this account's model list")).clicked() {
         app.refresh_models(engine);
     }
 }
@@ -358,7 +363,7 @@ fn custom_model(app: &mut App, ui: &mut Ui) {
                 .desired_width(280.0)
                 .font(FontId::proportional(12.5))
                 .margin(Margin::symmetric(10, 6))
-                .hint_text("identifiant exact, ex. claude-opus-5-5"),
+                .hint_text(tr("identifiant exact, ex. claude-opus-5-5", "exact id, e.g. claude-opus-5-5")),
         );
         let submit = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
         if widgets::pill(ui, Some(Icon::Check), "OK", ACCENT_HI, false).clicked() || submit {
@@ -368,7 +373,7 @@ fn custom_model(app: &mut App, ui: &mut Ui) {
             }
             keep = false;
         }
-        if widgets::icon_button(ui, Icon::Close, "Annuler").clicked() {
+        if widgets::icon_button(ui, Icon::Close, tr("Annuler", "Cancel")).clicked() {
             keep = false;
         }
     });
@@ -394,7 +399,7 @@ fn effort_picker(app: &mut App, ui: &mut Ui) {
             }
         }
     });
-    resp.on_hover_text("Budget de réflexion du moteur actif. Off = réponse directe, sans réflexion.");
+    resp.on_hover_text(tr("Budget de réflexion du moteur actif. Off = réponse directe, sans réflexion.", "Thinking budget of the active engine. Off = direct answer, no thinking."));
     if effort != app.settings.effort.get(app.settings.engine) {
         let mut settings = app.settings.clone();
         settings.effort.set(settings.engine, effort);
@@ -406,14 +411,14 @@ fn effort_picker(app: &mut App, ui: &mut Ui) {
 pub(super) fn engine_short(engine: Engine, mode: AuthMode) -> String {
     let name = engine.label().split_whitespace().next().unwrap_or_default();
     let tag = match mode {
-        AuthMode::Subscription if engine.subscription_capable() => "abonnement",
-        _ => "clé API",
+        AuthMode::Subscription if engine.subscription_capable() => tr("abonnement", "subscription"),
+        _ => tr("clé API", "API key"),
     };
     format!("{name} · {tag}")
 }
 
 pub(super) fn effort_label(effort: Effort) -> String {
-    if effort == Effort::Off { "effort Off (sans réflexion)".to_owned() } else { format!("effort {}", effort.label()) }
+    if effort == Effort::Off { tr("effort Off (sans réflexion)", "effort Off (no thinking)").to_owned() } else { format!("effort {}", effort.label()) }
 }
 
 /// Round send (↑) / stop (■) button: gradient orb, glow when ready, red pulse while running.
@@ -449,7 +454,7 @@ fn action_button(ui: &mut Ui, rect: Rect, busy: bool, ready: bool, t: f64) -> bo
     } else {
         icons::at(p, rect.center(), 18.0, Icon::ArrowUp, fx::mix(MUTED, Color32::WHITE, on));
     }
-    resp.on_hover_text(if busy { "Arrêter (Échap)" } else { "Envoyer (Entrée)" }).clicked()
+    resp.on_hover_text(if busy { tr("Arrêter (Échap)", "Stop (Esc)") } else { tr("Envoyer (Entrée)", "Send (Enter)") }).clicked()
 }
 
 #[cfg(test)]

@@ -206,7 +206,12 @@ pub async fn usage(http: &Client, access: &str) -> Option<Vec<Window>> {
 
 /// Lenient parser: only the documented window keys become rows.
 pub fn windows(v: &Value) -> Vec<Window> {
-    [("five_hour", "5 h"), ("seven_day", "7 jours"), ("seven_day_opus", "7 j Opus"), ("seven_day_sonnet", "7 j Sonnet")]
+    [
+        ("five_hour", "5 h"),
+        ("seven_day", crate::ui::tr("7 jours", "7 days")),
+        ("seven_day_opus", crate::ui::tr("7 j Opus", "7 d Opus")),
+        ("seven_day_sonnet", crate::ui::tr("7 j Sonnet", "7 d Sonnet")),
+    ]
         .into_iter()
         .filter_map(|(key, label)| {
             let w = &v[key];

@@ -29,7 +29,11 @@ pub fn show(app: &mut App, ui: &mut Ui, heading: fn(&mut Ui, &str)) {
         }
     }
     ui.add_space(4.0);
-    let tip = format!("Ajouter des fichiers .md à la mémoire ({MAX_FILES} max, {} car. envoyés au plus)", memory::MAX_CHARS);
+    let tip = if super::i18n::english() {
+        format!("Add .md files to memory ({MAX_FILES} max, at most {} chars sent)", memory::MAX_CHARS)
+    } else {
+        format!("Ajouter des fichiers .md à la mémoire ({MAX_FILES} max, {} car. envoyés au plus)", memory::MAX_CHARS)
+    };
     if widgets::pill(ui, Some(Icon::Plus), tr("Importer des .md", "Import .md"), ACCENT_HI, false).on_hover_text(tip).clicked() {
         action = Some(Action::Import);
     }
@@ -49,7 +53,7 @@ fn row(ui: &mut Ui, note: &Note) -> bool {
             let label = format!("{} · {:.1} Ko", note.name, note.bytes as f32 / 1024.0);
             widgets::truncated(ui, &label, FontId::proportional(12.5), SOFT);
         });
-        widgets::icon_button(ui, Icon::Trash, "Retirer de la mémoire").clicked()
+        widgets::icon_button(ui, Icon::Trash, tr("Retirer de la mémoire", "Remove from memory")).clicked()
     })
     .inner
 }
@@ -60,7 +64,7 @@ impl App {
         let dir = memory::dir();
         for path in picked {
             match memory::add(&dir, &path) {
-                Ok(name) => self.notify(format!("{name} ajouté à la mémoire")),
+                Ok(name) => self.notify(format!("{name} {}", tr("ajouté à la mémoire", "added to memory"))),
                 Err(e) => self.notify(format!("{e:#}")),
             }
         }
@@ -68,7 +72,7 @@ impl App {
 
     fn forget_memory(&mut self, name: &str) {
         match memory::remove(&memory::dir(), name) {
-            Ok(()) => self.notify(format!("{name} retiré de la mémoire")),
+            Ok(()) => self.notify(format!("{name} {}", tr("retiré de la mémoire", "removed from memory"))),
             Err(e) => self.notify(format!("{e:#}")),
         }
     }

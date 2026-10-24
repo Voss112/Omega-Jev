@@ -6,7 +6,8 @@ use std::{sync::Arc, time::Duration};
 use eframe::egui::{self, FontId, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use super::{
-    App, fx,
+    App,
+    i18n::tr, fx,
     icons::{self, Icon},
     theme::{RED, SOFT, TEXT, TILE_ACTIVE},
     widgets,
@@ -52,7 +53,7 @@ impl App {
         }
         // First use downloads the model: the VPN kill-switch applies to that request too.
         if !model::installed(&model::TURBO) && self.settings.require_vpn && !self.vpn.as_ref().is_some_and(|v| v.active) {
-            self.notify("Kill-switch VPN : aucun VPN détecté, téléchargement du modèle vocal bloqué.");
+            self.notify(tr("Kill-switch VPN : aucun VPN détecté, téléchargement du modèle vocal bloqué.", "VPN kill-switch: no VPN detected, voice model download blocked."));
             return;
         }
         let Some(rt) = self.rt.as_ref().map(|rt| rt.handle().clone()) else { return };
@@ -86,7 +87,7 @@ impl App {
                 Update::Download { done, total } => v.phase = Phase::Download(done * 100 / total.max(1)),
                 Update::Listening => v.phase = Phase::Listening,
                 Update::Text(text) => dictation::append(&mut self.draft, &text),
-                Update::Failed(e) => self.notice = Some((format!("Dictée : {e}"), std::time::Instant::now())),
+                Update::Failed(e) => self.notice = Some((format!("{} : {e}", tr("Dictée", "Dictation")), std::time::Instant::now())),
                 Update::Finished => finished = Some(v.send_after),
             }
         }
@@ -105,18 +106,18 @@ impl App {
 /// Composer toolbar control: a mic button when idle, a live pill while dictating. `true` when clicked.
 pub(super) fn button(app: &App, ui: &mut Ui, t: f64) -> bool {
     let Some(v) = &app.voice else {
-        return widgets::icon_button(ui, Icon::Mic, "Dicter (Ctrl+M) : parlez, le texte s'écrit au fil des phrases · Entrée envoie")
+        return widgets::icon_button(ui, Icon::Mic, tr("Dicter (Ctrl+M) : parlez, le texte s'écrit au fil des phrases · Entrée envoie", "Dictate (Ctrl+M): speak, the text is written sentence by sentence · Enter sends"))
             .clicked();
     };
     let label = match (v.phase, v.session.stopping()) {
-        (Phase::Download(pct), _) => format!("Modèle vocal {pct} %"),
-        (_, true) => "Transcription…".to_owned(),
-        (Phase::Starting, false) => "Préparation…".to_owned(),
-        (Phase::Listening, false) => "Écoute".to_owned(),
+        (Phase::Download(pct), _) => format!("{} {pct} %", tr("Modèle vocal", "Voice model")),
+        (_, true) => tr("Transcription…", "Transcribing…").to_owned(),
+        (Phase::Starting, false) => tr("Préparation…", "Preparing…").to_owned(),
+        (Phase::Listening, false) => tr("Écoute", "Listening").to_owned(),
     };
     let listening = v.phase == Phase::Listening && !v.session.stopping();
     live_pill(ui, &label, if listening { v.session.level() } else { 0.0 }, listening, t)
-        .on_hover_text("Cliquer ou Ctrl+M pour arrêter · Entrée arrête et envoie")
+        .on_hover_text(tr("Cliquer ou Ctrl+M pour arrêter · Entrée arrête et envoie", "Click or Ctrl+M to stop · Enter stops and sends"))
         .clicked()
 }
 

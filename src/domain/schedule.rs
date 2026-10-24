@@ -87,7 +87,7 @@ impl Job {
     /// `24/10 08:30 · chaque jour · Claude Opus 5.5 · effort Max`
     pub fn label(&self) -> String {
         let when = self.at.with_timezone(&Local).format("%d/%m %H:%M");
-        let repeat = if self.daily { "chaque jour" } else { "une fois" };
+        let repeat = if self.daily { crate::ui::tr("chaque jour", "every day") } else { crate::ui::tr("une fois", "once") };
         let who =
             if self.model.trim().is_empty() { self.engine.label().to_owned() } else { models::name(self.engine, &self.model) };
         format!("{when} · {repeat} · {who} · effort {}", self.effort.label())
@@ -96,9 +96,9 @@ impl Job {
 
 /// `"2026-10-24"` + `"08:30"` in local time → UTC instant.
 pub fn parse_when(date: &str, time: &str) -> Result<DateTime<Utc>, String> {
-    let date = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").map_err(|_| "date attendue : AAAA-MM-JJ".to_owned())?;
-    let time = NaiveTime::parse_from_str(time.trim(), "%H:%M").map_err(|_| "heure attendue : HH:MM".to_owned())?;
-    instant(date, time).ok_or_else(|| "heure locale inexistante (changement d'heure)".to_owned())
+    let date = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").map_err(|_| crate::ui::tr("date attendue : AAAA-MM-JJ", "expected date: YYYY-MM-DD").to_owned())?;
+    let time = NaiveTime::parse_from_str(time.trim(), "%H:%M").map_err(|_| crate::ui::tr("heure attendue : HH:MM", "expected time: HH:MM").to_owned())?;
+    instant(date, time).ok_or_else(|| crate::ui::tr("heure locale inexistante (changement d'heure)", "local time does not exist (clock change)").to_owned())
 }
 
 /// Local wall-clock time → UTC instant; the earlier one when the time repeats (fall back).

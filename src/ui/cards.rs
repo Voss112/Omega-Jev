@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::{
     fx,
+    i18n::tr,
     icons::{self, Icon},
     theme::{self, ACCENT_HI, AMBER, CODE_BG, CYAN, EDGE, FAINT, GREEN, MUTED, RED, SOFT, TEXT, TILE, TILE_HOVER},
     widgets,
@@ -79,13 +80,13 @@ pub fn tool_card(ui: &mut Ui, owner: usize, call: &ToolCall, result: Option<&Mes
         Frame::new().inner_margin(Margin { left: 12, right: 12, top: 0, bottom: 12 }).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ScrollArea::vertical().id_salt(("out", owner, &call.id)).max_height(320.0).show(ui, |ui| match result {
-                None => code_block(ui, RichText::new("en cours…").monospace().color(SOFT)),
+                None => code_block(ui, RichText::new(tr("en cours…", "running…")).monospace().color(SOFT)),
                 Some(m) => {
                     if let Some(diff) = &m.diff {
                         diff_view(ui, diff);
                     }
                     if m.cleared {
-                        ui.label(RichText::new("Effacé du contexte du modèle (budget dépassé) · conservé ici").size(11.5).color(FAINT));
+                        ui.label(RichText::new(tr("Effacé du contexte du modèle (budget dépassé) · conservé ici", "Cleared from the model's context (budget exceeded) · kept here")).size(11.5).color(FAINT));
                     }
                     code_block(ui, RichText::new(clip(&m.content, 8000)).monospace().size(12.0).color(SOFT));
                 }
@@ -121,8 +122,8 @@ pub fn approval(ui: &mut Ui, a: &Approval) -> Option<bool> {
     let frame = Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let (icon, title) = match a.kind {
-            ApprovalKind::Command => (Icon::Alert, "Autorisation requise : commande"),
-            ApprovalKind::Edit => (Icon::Pencil, "Valider la modification"),
+            ApprovalKind::Command => (Icon::Alert, tr("Autorisation requise : commande", "Permission required: command")),
+            ApprovalKind::Edit => (Icon::Pencil, tr("Valider la modification", "Approve the edit")),
         };
         ui.horizontal(|ui| {
             let (badge, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
@@ -143,11 +144,11 @@ pub fn approval(ui: &mut Ui, a: &Approval) -> Option<bool> {
         });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            if widgets::primary_icon(ui, Some(Icon::Check), "Autoriser", 136.0).clicked() {
+            if widgets::primary_icon(ui, Some(Icon::Check), tr("Autoriser", "Allow"), 136.0).clicked() {
                 decision = Some(true);
             }
             ui.add_space(4.0);
-            if widgets::pill(ui, Some(Icon::Close), "Refuser", MUTED, false).clicked() {
+            if widgets::pill(ui, Some(Icon::Close), tr("Refuser", "Deny"), MUTED, false).clicked() {
                 decision = Some(false);
             }
         });

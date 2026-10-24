@@ -20,8 +20,23 @@ use crate::{domain::engine::Effort, infra::process};
 pub const INSTALL: &str = "irm https://antigravity.google/cli/install.ps1 | iex";
 const TIMEOUT: Duration = Duration::from_secs(600);
 
-/// `agy` on PATH, or where the official installer puts it.
+/// `agy` on PATH, or where the official installer puts it. Asked every frame by the settings form and the
+/// panel: the PATH scan is reused for a few seconds.
 pub fn binary() -> Option<PathBuf> {
+    type Found = Option<(std::time::Instant, Option<PathBuf>)>;
+    static CACHE: std::sync::Mutex<Found> = std::sync::Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((at, found)) = cache.as_ref()
+        && at.elapsed() < Duration::from_secs(5)
+    {
+        return found.clone();
+    }
+    let found = find();
+    *cache = Some((std::time::Instant::now(), found.clone()));
+    found
+}
+
+fn find() -> Option<PathBuf> {
     process::which("agy").or_else(|| {
         let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
         Some(local.join("agy").join("bin").join("agy.exe")).filter(|p| p.is_file())
@@ -30,7 +45,7 @@ pub fn binary() -> Option<PathBuf> {
 
 /// Runs Google's installer without a window (it only downloads and checks `agy.exe`), then finds the binary.
 pub async fn install() -> Result<PathBuf> {
-    if let Some(bin) = binary() {
+    if let Some(bin) = find() {
         return Ok(bin);
     }
     let mut cmd = process::shell(INSTALL);
@@ -40,7 +55,7 @@ pub async fn install() -> Result<PathBuf> {
         .context("installation d'Antigravity : délai de 5 min dépassé")?
         .context("installation d'Antigravity")?;
     let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    binary().with_context(|| format!("agy introuvable après l'installation : {}", log.trim().chars().take(400).collect::<String>()))
+    find().with_context(|| format!("agy introuvable après l'installation : {}", log.trim().chars().take(400).collect::<String>()))
 }
 
 /// A visible console running `agy`: first run opens the Google sign-in page; `/quit` closes the session.
@@ -141,6 +156,107 @@ fn parse_models(text: &str) -> Vec<String> {
         .collect();
     list.dedup();
     list
+}
+
+/// agy's own sign-in, from the Windows credential store: access token, its expiry and the account e-mail.
+pub struct Session {
+    pub access: String,
+    pub expiry: Option<chrono::DateTime<chrono::FixedOffset>>,
+    pub email: String,
+}
+
+/// The session agy saved (`gemini:antigravity` in the Windows credential store), if signed in.
+pub fn session() -> Option<Session> {
+    let v: Value = serde_json::from_str(&keyring::read("gemini:antigravity")?).ok()?;
+    let access = v["token"]["access_token"].as_str().filter(|t| !t.is_empty())?.to_owned();
+    let expiry = v["token"]["expiry"].as_str().and_then(|e| chrono::DateTime::parse_from_rfc3339(e).ok());
+    Some(Session { access, expiry, email: v["id_token_email"].as_str().unwrap_or_default().to_owned() })
+}
+
+/// Plan quota of the Antigravity sign-in, one row per shared pool. agy refreshes its own token on any run,
+/// so an expired one is renewed by a cheap `agy models` first.
+pub async fn usage(http: &reqwest::Client, bin: &Path) -> Option<Vec<crate::domain::auth::Window>> {
+    let fresh = |s: &Session| s.expiry.is_none_or(|e| e > chrono::Utc::now() + chrono::Duration::seconds(60));
+    let session = match session() {
+        Some(s) if fresh(&s) => s,
+        _ => {
+            let renew = process::command(bin).arg("models").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+            let _ = tokio::time::timeout(Duration::from_secs(60), renew).await;
+            session().filter(fresh)?
+        }
+    };
+    let res = http
+        .post(format!("{}:retrieveUserQuota", crate::infra::auth::gemini::CODE_ASSIST))
+        .bearer_auth(&session.access)
+        // Code Assist only answers Antigravity tokens that present themselves as Antigravity.
+        .header("user-agent", "antigravity")
+        .json(&json!({}))
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .ok()?;
+    if !res.status().is_success() {
+        return None;
+    }
+    let v: Value = res.json().await.ok()?;
+    Some(pools(&v)).filter(|w| !w.is_empty())
+}
+
+/// Models of one plan share an allowance: buckets with the same remaining fraction and reset time become one
+/// row named after their families (`Gemini`, `Claude · GPT`). Buckets without a reset (autocomplete) are skipped.
+fn pools(v: &Value) -> Vec<crate::domain::auth::Window> {
+    let mut rows: Vec<(String, f64, Vec<String>)> = Vec::new();
+    for b in v["buckets"].as_array().into_iter().flatten() {
+        let (Some(id), Some(left), Some(reset)) = (b["modelId"].as_str(), b["remainingFraction"].as_f64(), b["resetTime"].as_str())
+        else {
+            continue;
+        };
+        let family = match id.split('-').next().unwrap_or(id) {
+            "gpt" => "GPT".to_owned(),
+            f => f[..1].to_uppercase() + &f[1..],
+        };
+        match rows.iter_mut().find(|(r, l, _)| r == reset && (l - left).abs() < 1e-6) {
+            Some((_, _, families)) if !families.contains(&family) => families.push(family),
+            Some(_) => {}
+            None => rows.push((reset.to_owned(), left, vec![family])),
+        }
+    }
+    rows.into_iter()
+        .map(|(reset, left, families)| crate::domain::auth::Window {
+            label: families.join(" · "),
+            fraction: (1.0 - left).clamp(0.0, 1.0) as f32,
+            resets: Some(reset),
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+mod keyring {
+    use windows_sys::Win32::Security::Credentials::{CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW};
+
+    /// Secret of a generic credential, as UTF-8.
+    pub fn read(target: &str) -> Option<String> {
+        let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut cred: *mut CREDENTIALW = std::ptr::null_mut();
+        // SAFETY: `wide` is NUL-terminated; on success `cred` points to a block owned by the OS until `CredFree`.
+        unsafe {
+            if CredReadW(wide.as_ptr(), CRED_TYPE_GENERIC, 0, &mut cred) == 0 || cred.is_null() {
+                return None;
+            }
+            let c = &*cred;
+            let blob = std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize);
+            let text = String::from_utf8(blob.to_vec()).ok();
+            CredFree(cred.cast());
+            text
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod keyring {
+    pub fn read(_target: &str) -> Option<String> {
+        None
+    }
 }
 
 /// One headless run: the prompt goes in on stdin (no command-line length limit), text deltas stream out.
@@ -256,6 +372,32 @@ mod tests {
         let spent = finish(Completion::default(), &json!({ "status": "ERROR", "error": "Quota exceeded for model" })).err().unwrap();
         assert!(super::super::exhausted(&spent));
         assert!(finish(Completion::default(), &json!({ "status": "ERROR", "error": "unknown model" })).is_err());
+    }
+
+    #[test]
+    fn quota_buckets_merge_into_shared_pools() {
+        let v = json!({ "buckets": [
+            { "modelId": "chat_20706", "remainingFraction": 1 },
+            { "modelId": "claude-sonnet-4-6", "remainingFraction": 1, "resetTime": "2026-10-24T23:30:55Z" },
+            { "modelId": "gemini-2.5-pro", "remainingFraction": 0.75, "resetTime": "2026-10-24T19:58:13Z" },
+            { "modelId": "gemini-3.8-flash-tiered", "remainingFraction": 0.75, "resetTime": "2026-10-24T19:58:13Z" },
+            { "modelId": "gpt-oss-120b-medium", "remainingFraction": 1, "resetTime": "2026-10-24T23:30:55Z" },
+        ] });
+        let rows = pools(&v);
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].label.as_str(), rows[1].label.as_str()), ("Claude · GPT", "Gemini"));
+        assert!((rows[1].fraction - 0.25).abs() < 1e-6 && rows[0].fraction == 0.0);
+    }
+
+    /// Real quota of the signed-in agy: `cargo test -- --ignored agy_quota_live --nocapture`.
+    #[tokio::test]
+    #[ignore = "agy installé et connecté"]
+    async fn agy_quota_live() {
+        let bin = binary().expect("agy installé");
+        let rows = usage(&crate::infra::http::client("").unwrap(), &bin).await.expect("quota");
+        for w in &rows {
+            println!("{} {:.1} % {:?}", w.label, w.fraction * 100.0, w.resets);
+        }
     }
 
     /// Real run with the installed, signed-in agy: `cargo test -- --ignored agy_live --nocapture`.

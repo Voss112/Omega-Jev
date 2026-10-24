@@ -50,7 +50,23 @@ impl Completion {
     fn finish(mut self, engine: Engine) -> Result<Self> {
         let detail = if self.stop_detail.is_empty() { self.stop.clone() } else { self.stop_detail.clone() };
         if self.stop == "refusal" {
-            bail!("{} a refusé de répondre ({detail}) — reformulez la demande.", engine.label());
+            let en = crate::ui::english();
+            let hint = match (detail.as_str(), en) {
+                ("reasoning_extraction", false) => {
+                    "la demande lui fait recopier son raisonnement interne dans la réponse : retirez toute consigne sur sa façon de réfléchir"
+                }
+                ("reasoning_extraction", true) => {
+                    "the request asks it to write out its internal reasoning: remove any instruction about how it should think"
+                }
+                ("cyber" | "bio" | "general_harms" | "frontier_llm", false) => "filtre de sécurité du fournisseur : reformulez ou changez de moteur",
+                ("cyber" | "bio" | "general_harms" | "frontier_llm", true) => "provider safety filter: rephrase or switch engine",
+                (_, false) => "reformulez la demande",
+                (_, true) => "rephrase the request",
+            };
+            if en {
+                bail!("{} declined to answer ({detail}) — {hint}.", engine.label());
+            }
+            bail!("{} a refusé de répondre ({detail}) — {hint}.", engine.label());
         }
         if self.parts.is_empty() {
             self.tool_calls.retain(|c| !c.name.trim().is_empty());
@@ -673,7 +689,7 @@ mod tests {
         let (settings, _) = crate::infra::store::load_settings();
         let llm = Llm::new(crate::infra::http::client(&settings.proxy).unwrap(), &settings, Engine::Gemini);
         println!("subscription={} wire={:?} configured={}", llm.subscription(), llm.wire(), llm.configured());
-        if let Some(auth) = &llm.auth {
+        if let Some(auth) = llm.auth.clone().or_else(|| Auth::load(crate::domain::auth::Provider::Gemini)) {
             println!("project stocké: {:?} compte: {:?}", auth.project(), auth.account());
             let token = auth.fresh(&llm.http).await.unwrap();
             let probe = json!({ "metadata": { "pluginType": "GEMINI", "ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED" } });
@@ -687,6 +703,10 @@ mod tests {
                 .await
                 .unwrap();
             println!("loadCodeAssist {}: {}", res.status(), res.text().await.unwrap_or_default());
+            let quota = gemini_auth::post(&llm.http, &token, "retrieveUserQuota", &json!({ "project": auth.project() })).await;
+            println!("retrieveUserQuota: {:?}", quota.map(|v| v.to_string().chars().take(1500).collect::<String>()).map_err(|e| format!("{e:#}")));
+            let models = gemini_auth::post(&llm.http, &token, "fetchAvailableModels", &json!({})).await;
+            println!("fetchAvailableModels: {:?}", models.map(|v| v.to_string().chars().take(3000).collect::<String>()).map_err(|e| format!("{e:#}")));
         }
         println!("ping: {:?}", llm.ping().await.map_err(|e| format!("{e:#}")));
         for model in [settings.gemini_flash_model.clone(), settings.gemini_model.clone()] {

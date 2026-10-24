@@ -3,6 +3,7 @@
 use eframe::egui::{Grid, RichText, Ui};
 
 use super::{
+    i18n::tr,
     icons::Icon,
     theme::{EDGE, FAINT, GREEN, MUTED, RED, SOFT, TEXT},
     widgets,
@@ -20,7 +21,7 @@ pub fn section(ui: &mut Ui, convs: &[Conversation], bench: Option<&[Health]>, ru
         ledger += c.savings;
         jev += c.usage.jev;
     }
-    widgets::form_section(ui, Icon::Bolt, "Économies de tokens · preuve");
+    widgets::form_section(ui, Icon::Bolt, tr("Économies de tokens · preuve", "Token savings · proof"));
     ui.label(
         RichText::new(
             "Chiffres du fournisseur (exacts) pour chaque requête envoyée, toutes discussions confondues. \
@@ -34,7 +35,7 @@ pub fn section(ui: &mut Ui, convs: &[Conversation], bench: Option<&[Health]>, ru
     widgets::card(ui, EDGE, |ui| {
         ui.set_width(ui.available_width());
         if ledger.requests == 0 {
-            ui.label(RichText::new("Aucune requête mesurée pour l'instant : envoyez un message.").size(12.5).color(FAINT));
+            ui.label(RichText::new(tr("Aucune requête mesurée pour l'instant : envoyez un message.", "No request measured yet: send a message.")).size(12.5).color(FAINT));
             return;
         }
         ledger_grid(ui, &ledger, jev, convs.iter().filter(|c| c.savings.requests > 0).count());
@@ -44,12 +45,12 @@ pub fn section(ui: &mut Ui, convs: &[Conversation], bench: Option<&[Health]>, ru
     ui.horizontal_wrapped(|ui| {
         if running {
             ui.spinner();
-            ui.label(RichText::new("Banc d'essai en cours…").size(12.5).color(SOFT));
-        } else if widgets::pill(ui, Some(Icon::Flask), "Lancer le banc d'essai", SOFT, false).clicked() {
+            ui.label(RichText::new(tr("Banc d'essai en cours…", "Benchmark running…")).size(12.5).color(SOFT));
+        } else if widgets::pill(ui, Some(Icon::Flask), tr("Lancer le banc d'essai", "Run the benchmark"), SOFT, false).clicked() {
             run = true;
         }
         ui.label(
-            RichText::new("Moteur et clés enregistrés · quelques milliers de tokens (comptages Claude gratuits)")
+            RichText::new(tr("Moteur et clés enregistrés · quelques milliers de tokens (comptages Claude gratuits)", "Saved engine and keys · a few thousand tokens (Claude counts are free)"))
                 .size(11.0)
                 .color(FAINT),
         );
@@ -64,7 +65,7 @@ pub fn section(ui: &mut Ui, convs: &[Conversation], bench: Option<&[Health]>, ru
                 }
                 ui.horizontal(|ui| {
                     let (icon, color) = if r.ok { (Icon::Check, GREEN) } else { (Icon::Alert, RED) };
-                    widgets::chip_icon(ui, Some(icon), if r.ok { "OK" } else { "Échec" }, color);
+                    widgets::chip_icon(ui, Some(icon), if r.ok { "OK" } else { tr("Échec", "Failed") }, color);
                     ui.label(RichText::new(r.name).font(super::theme::bold(13.0)).color(TEXT));
                 });
                 ui.label(RichText::new(&r.detail).size(12.0).color(if r.ok { SOFT } else { RED }));
@@ -83,38 +84,44 @@ fn ledger_grid(ui: &mut Ui, l: &Ledger, jev: u64, convs: usize) {
             ui.label(RichText::new(value).monospace().size(12.0).color(TEXT));
             ui.end_row();
         };
-        line("Requêtes mesurées", format!("{} · {convs} discussion(s)", l.requests));
-        line("Entrée envoyée", format!("{} tokens", h(l.prompt)));
-        line("  lue du cache", format!("{} ({:.0} %)", h(l.cached), pct(l.cached as f64, l.prompt as f64)));
-        line("  écrite en cache", h(l.written));
-        line("Sortie", format!("{} tokens", h(l.completion)));
-        line("Jev (contrôle)", format!("{} tokens", h(jev)));
-        line("Évité · lazy tools (Jev)", format!("−{}", h(l.lazy)));
-        line("Évité · RTK (sorties shell)", format!("−{}", h(l.rtk)));
-        line("Évité · playbooks non renvoyés", format!("−{}", h(l.playbook)));
-        line("Évité · compaction", format!("−{}", h(l.summary)));
-        line("Évité · résultats effacés", format!("−{}", h(l.cleared)));
-        line("Remise · cache préfixe", format!("−{} équiv.", h(l.cache_saved().max(0.0) as u64)));
-        line("Sans Omega ni cache", format!("{} tokens plein tarif", h(l.baseline() as u64)));
-        line("Sans leviers (cache gardé)", format!("{} équiv.", h(l.without_levers() as u64)));
-        line("Avec Omega (facturé)", format!("{} équiv.", h(l.billed as u64)));
+        line(tr("Requêtes mesurées", "Measured requests"), format!("{} · {convs} {}", l.requests, tr("discussion(s)", "chat(s)")));
+        line(tr("Entrée envoyée", "Input sent"), format!("{} tokens", h(l.prompt)));
+        line(tr("  lue du cache", "  read from cache"), format!("{} ({:.0} %)", h(l.cached), pct(l.cached as f64, l.prompt as f64)));
+        line(tr("  écrite en cache", "  written to cache"), h(l.written));
+        line(tr("Sortie", "Output"), format!("{} tokens", h(l.completion)));
+        line(tr("Jev (contrôle)", "Jev (control)"), format!("{} tokens", h(jev)));
+        line(tr("Évité · lazy tools (Jev)", "Avoided · lazy tools (Jev)"), format!("−{}", h(l.lazy)));
+        line(tr("Évité · RTK (sorties shell)", "Avoided · RTK (shell output)"), format!("−{}", h(l.rtk)));
+        line(tr("Évité · playbooks non renvoyés", "Avoided · playbooks not resent"), format!("−{}", h(l.playbook)));
+        line(tr("Évité · compaction", "Avoided · compaction"), format!("−{}", h(l.summary)));
+        line(tr("Évité · résultats effacés", "Avoided · cleared results"), format!("−{}", h(l.cleared)));
+        line(tr("Remise · cache préfixe", "Discount · prefix cache"), format!("−{} {}", tr("équiv.", "equiv."), h(l.cache_saved().max(0.0) as u64)));
+        line(tr("Sans Omega ni cache", "Without Omega or cache"), format!("{} {}", h(l.baseline() as u64), tr("tokens plein tarif", "tokens at full price")));
+        line(tr("Sans leviers (cache gardé)", "Without levers (cache kept)"), format!("{} {}", h(l.without_levers() as u64), tr("équiv.", "equiv.")));
+        line(tr("Avec Omega (facturé)", "With Omega (billed)"), format!("{} {}", h(l.billed as u64), tr("équiv.", "equiv.")));
         if jev > 0 {
             line(
-                "Bilan Jev au tarif réel",
-                format!("{:.2}× ({} équiv. évités / {} tokens Jev)", l.jev_billed / jev as f64, h(l.jev_billed as u64), h(jev)),
+                tr("Bilan Jev au tarif réel", "Jev balance at real price"),
+                format!(
+                    "{:.2}× ({} {} / {} tokens Jev)",
+                    l.jev_billed / jev as f64,
+                    h(l.jev_billed as u64),
+                    tr("équiv. évités", "equiv. avoided"),
+                    h(jev)
+                ),
             );
         }
         let calib = if l.calibrated() {
-            format!("1 token ≈ {:.2} octets (mesuré)", 1.0 / l.ratio())
+            format!("1 token ≈ {:.2} {}", 1.0 / l.ratio(), tr("octets (mesuré)", "bytes (measured)"))
         } else {
-            "par défaut (images seules)".to_owned()
+            tr("par défaut (images seules)", "default (images only)").to_owned()
         };
-        line("Calibrage", calib);
+        line(tr("Calibrage", "Calibration"), calib);
     });
     ui.add_space(8.0);
     let share = l.saved_share() as f32;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Économie mesurée sur l'entrée").size(12.5).color(GREEN));
+        ui.label(RichText::new(tr("Économie mesurée sur l'entrée", "Measured input savings")).size(12.5).color(GREEN));
         ui.label(RichText::new(format!("{:.1} %", share * 100.0)).monospace().size(12.5).color(GREEN));
     });
     widgets::bar(ui, share, GREEN, 6.0);

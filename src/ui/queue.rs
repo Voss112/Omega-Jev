@@ -34,7 +34,7 @@ impl App {
         let Some(id) = self.current else { return };
         let queue = self.queue.entry(id).or_default();
         if queue.len() >= MAX_QUEUED {
-            self.notify(format!("File d'attente pleine ({MAX_QUEUED} prompts)"));
+            self.notify(format!("{} ({MAX_QUEUED} prompts)", tr("File d'attente pleine", "Queue full")));
             return;
         }
         queue.push_back(Queued { text: super::docs::inline(&text, &self.docs), images: std::mem::take(&mut self.shots) });
@@ -115,20 +115,20 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
                 widgets::truncated(ui, &label, FontId::proportional(12.5), SOFT);
             });
             if busy {
-                let tip = "L'agent lit ce message pendant qu'il travaille (après sa prochaine action)";
+                let tip = tr("L'agent lit ce message pendant qu'il travaille (après sa prochaine action)", "The agent reads this message while it works (after its next action)");
                 if widgets::pill(ui, Some(Icon::Bolt), tr("Forcer", "Force"), ACCENT_HI, false).on_hover_text(tip).clicked() {
                     action = Some(Action::Force(i));
                 }
             } else if widgets::pill(ui, Some(Icon::ArrowUp), tr("Envoyer", "Send"), ACCENT_HI, false).clicked() {
                 action = Some(Action::Send(i));
             }
-            if widgets::icon_button(ui, Icon::Close, "Retirer de la file").clicked() {
+            if widgets::icon_button(ui, Icon::Close, tr("Retirer de la file", "Remove from the queue")).clicked() {
                 action = Some(Action::Remove(i));
             }
         });
     }
     if queue.len() > SHOWN {
-        ui.label(widgets::text(format!("… et {} autre(s)", queue.len() - SHOWN), 11.0, FAINT));
+        ui.label(widgets::text(format!("… {} {} {}", tr("et", "and"), queue.len() - SHOWN, tr("autre(s)", "more")), 11.0, FAINT));
     }
     ui.add_space(6.0);
     if let Some(action) = action {

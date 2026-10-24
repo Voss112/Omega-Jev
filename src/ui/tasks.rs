@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use super::{
     App,
+    i18n::{english, tr},
     chat::column,
     icons::Icon,
     theme::{self, ACCENT_HI, AMBER, CYAN, EDGE, FAINT, GREEN, MUTED, RED, SOFT, TEXT},
@@ -35,19 +36,19 @@ pub fn view(app: &mut App, ui: &mut Ui) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.set_height(34.0);
-        ui.label(RichText::new("Tâches programmées").font(theme::bold(17.0)).color(TEXT));
+        ui.label(RichText::new(tr("Tâches programmées", "Scheduled tasks")).font(theme::bold(17.0)).color(TEXT));
         let pending = app.jobs.iter().filter(|j| j.pending() && !j.paused).count();
-        widgets::chip(ui, format!("{pending} active(s)"), if pending > 0 { CYAN } else { FAINT });
+        widgets::chip(ui, format!("{pending} {}", tr("active(s)", "active")), if pending > 0 { CYAN } else { FAINT });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill(ui, Some(Icon::Close), "Fermer", MUTED, false).clicked() {
+            if widgets::pill(ui, Some(Icon::Close), tr("Fermer", "Close"), MUTED, false).clicked() {
                 action = Some(Action::Close);
             }
-            if widgets::pill(ui, Some(Icon::Plus), "Programmer…", ACCENT_HI, false).clicked() {
+            if widgets::pill(ui, Some(Icon::Plus), tr("Programmer…", "Schedule…"), ACCENT_HI, false).clicked() {
                 action = Some(Action::New);
             }
         });
     });
-    ui.label(widgets::text("Exécutées en mode Bypass, avec leur propre moteur — Omega doit rester ouvert.", 12.0, FAINT));
+    ui.label(widgets::text(tr("Exécutées en mode Bypass, avec leur propre moteur — Omega doit rester ouvert.", "Run in Bypass mode with their own engine — Omega must stay open."), 12.0, FAINT));
     ui.add_space(6.0);
     let armed = app.task_delete_armed.filter(|(_, at)| at.elapsed() < DELETE_CONFIRM).map(|(id, _)| id);
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -55,14 +56,14 @@ pub fn view(app: &mut App, ui: &mut Ui) {
             if app.jobs.is_empty() {
                 ui.add_space(30.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(widgets::text("Aucune tâche. « Programmer… » ou le bouton ⏰ de la zone de saisie.", 13.0, FAINT));
+                    ui.label(widgets::text(tr("Aucune tâche. « Programmer… » ou le bouton ⏰ de la zone de saisie.", "No tasks. “Schedule…” or the ⏰ button of the input box."), 13.0, FAINT));
                 });
                 return;
             }
             let groups: [(&str, Filter); 3] = [
-                ("À venir", |j| j.pending() && !j.paused),
-                ("En pause", |j| j.pending() && j.paused),
-                ("Terminées", |j| !j.pending()),
+                (tr("À venir", "Upcoming"), |j| j.pending() && !j.paused),
+                (tr("En pause", "Paused"), |j| j.pending() && j.paused),
+                (tr("Terminées", "Done"), |j| !j.pending()),
             ];
             for (title, keep) in groups {
                 let jobs: Vec<&Job> = app.jobs.iter().filter(|j| keep(j)).collect();
@@ -121,10 +122,10 @@ fn card(ui: &mut Ui, job: &Job, running: bool, armed: bool) -> Option<Action> {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             let (label, color) = match (running, job.paused, job.done) {
-                (true, _, _) => ("en cours", CYAN),
-                (_, true, _) => ("en pause", AMBER),
-                (_, _, true) => ("terminée", GREEN),
-                _ => ("programmée", ACCENT_HI),
+                (true, _, _) => (tr("en cours", "running"), CYAN),
+                (_, true, _) => (tr("en pause", "paused"), AMBER),
+                (_, _, true) => (tr("terminée", "done"), GREEN),
+                _ => (tr("programmée", "scheduled"), ACCENT_HI),
             };
             widgets::chip(ui, label, color);
             ui.label(RichText::new(job.label()).size(12.5).color(SOFT));
@@ -132,32 +133,36 @@ fn card(ui: &mut Ui, job: &Job, running: bool, armed: bool) -> Option<Action> {
         ui.add_space(4.0);
         ui.label(RichText::new(job.prompt.clone()).size(13.0).color(TEXT));
         if job.pending() && !job.paused {
-            ui.label(widgets::text(format!("Prochaine exécution : {}", countdown(job)), 11.5, FAINT));
+            ui.label(widgets::text(format!("{} {}", tr("Prochaine exécution :", "Next run:"), countdown(job)), 11.5, FAINT));
         }
         if let Some(last) = job.runs.last() {
             ui.horizontal(|ui| {
                 let when = last.at.with_timezone(&Local).format("%d/%m %H:%M");
-                ui.label(widgets::text(format!("Dernière exécution : {when} · {} au total", job.runs.len()), 11.5, FAINT));
-                if widgets::pill(ui, Some(Icon::Bubble), "Ouvrir la discussion", MUTED, false).clicked() {
+                ui.label(widgets::text(if english() {
+                    format!("Last run: {when} · {} in total", job.runs.len())
+                } else {
+                    format!("Dernière exécution : {when} · {} au total", job.runs.len())
+                }, 11.5, FAINT));
+                if widgets::pill(ui, Some(Icon::Bubble), tr("Ouvrir la discussion", "Open the chat"), MUTED, false).clicked() {
                     action = Some(Action::Open(last.conv));
                 }
             });
         }
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
-            if widgets::pill(ui, Some(Icon::Bolt), "Lancer maintenant", SOFT, false).clicked() && !running {
+            if widgets::pill(ui, Some(Icon::Bolt), tr("Lancer maintenant", "Run now"), SOFT, false).clicked() && !running {
                 action = Some(Action::Run(job.id));
             }
             if job.pending() {
-                let (icon, text) = if job.paused { (Icon::Refresh, "Reprendre") } else { (Icon::Stop, "Mettre en pause") };
+                let (icon, text) = if job.paused { (Icon::Refresh, tr("Reprendre", "Resume")) } else { (Icon::Stop, tr("Mettre en pause", "Pause")) };
                 if widgets::pill(ui, Some(icon), text, SOFT, false).clicked() {
                     action = Some(Action::Toggle(job.id));
                 }
             }
-            if widgets::pill(ui, Some(Icon::Pencil), "Modifier", SOFT, false).clicked() {
+            if widgets::pill(ui, Some(Icon::Pencil), tr("Modifier", "Edit"), SOFT, false).clicked() {
                 action = Some(Action::Edit(job.id));
             }
-            let (text, color) = if armed { ("Re-cliquer pour supprimer", RED) } else { ("Supprimer", MUTED) };
+            let (text, color) = if armed { (tr("Re-cliquer pour supprimer", "Click again to delete"), RED) } else { (tr("Supprimer", "Delete"), MUTED) };
             if widgets::pill(ui, Some(Icon::Trash), text, color, armed).clicked() {
                 action = Some(Action::Delete(job.id));
             }
@@ -171,6 +176,14 @@ fn countdown(job: &Job) -> String {
     let left = job.at - Utc::now();
     let minutes = left.num_minutes();
     let at = job.at.with_timezone(&Local).format("%d/%m %H:%M");
+    if english() {
+        return match minutes {
+            ..=0 => format!("{at} (now)"),
+            1..=59 => format!("{at} (in {minutes} min)"),
+            60..=2879 => format!("{at} (in {} h {:02})", minutes / 60, minutes % 60),
+            _ => format!("{at} (in {} d)", minutes / 1440),
+        };
+    }
     match minutes {
         ..=0 => format!("{at} (maintenant)"),
         1..=59 => format!("{at} (dans {minutes} min)"),

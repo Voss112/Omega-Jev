@@ -12,6 +12,7 @@ use eframe::egui::{
 
 use super::{
     fx,
+    i18n::tr,
     icons::{self, Icon},
     theme::{self, ACCENT, ACCENT_HI, CYAN, EDGE, EDGE_HI, FAINT, INDIGO, MUTED, SOFT, TEXT, TILE, TILE_ACTIVE, TILE_HOVER},
 };
@@ -37,7 +38,8 @@ pub fn chip(ui: &mut Ui, text: impl Into<String>, color: Color32) -> Response {
 }
 
 pub fn chip_icon(ui: &mut Ui, icon: Option<Icon>, text: impl Into<String>, color: Color32) -> Response {
-    let galley = line(ui, text, FontId::proportional(11.5), color, 360.0);
+    let text = text.into();
+    let galley = line(ui, text.clone(), FontId::proportional(11.5), color, 360.0);
     let icon_w = if icon.is_some() { 15.0 } else { 0.0 };
     let size = vec2(galley.size().x + icon_w + 18.0, 22.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
@@ -46,8 +48,9 @@ pub fn chip_icon(ui: &mut Ui, icon: Option<Icon>, text: impl Into<String>, color
     if let Some(icon) = icon {
         icons::at(p, rect.left_center() + vec2(15.0, 0.0), 12.0, icon, color);
     }
+    let elided = galley.elided;
     p.galley(rect.left_center() + vec2(9.0 + icon_w, -galley.size().y / 2.0), galley, color);
-    resp
+    if elided { resp.on_hover_text(text) } else { resp }
 }
 
 /// Glass tile inside a panel.
@@ -194,6 +197,8 @@ pub fn paint_logo(p: &Painter, rect: Rect, t: f64) {
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let galley = line(ui, label, FontId::proportional(13.0), SOFT, ui.available_width() - 50.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(44.0 + galley.size().x, 22.0), Sense::click());
+    // A cut description stays readable: the whole text shows in a tooltip.
+    let resp = if galley.elided { resp.on_hover_text(label) } else { resp };
     if resp.clicked() {
         *on = !*on;
     }
@@ -285,7 +290,7 @@ pub fn modal_header(ui: &mut Ui, icon: Icon, title: &str, subtitle: &str) -> boo
             ui.label(RichText::new(subtitle).size(12.5).color(MUTED));
         });
         ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Min), |ui| {
-            close = icon_button(ui, Icon::Close, "Fermer (Échap)").clicked();
+            close = icon_button(ui, Icon::Close, tr("Fermer (Échap)", "Close (Esc)")).clicked();
         });
     });
     close

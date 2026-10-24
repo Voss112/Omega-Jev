@@ -15,7 +15,8 @@ use eframe::egui::{
 };
 
 use super::{
-    App, fx, highlight,
+    App,
+    i18n::tr, fx, highlight,
     icons::{self, Icon},
     theme::{
         self, ACCENT, ACCENT_HI, AMBER, CODE_BG, CYAN, EDGE, EDGE_HI, FAINT, GREEN, MUTED, PINK, RED, SOFT, TEXT, TILE_ACTIVE,
@@ -69,7 +70,7 @@ impl OpenFile {
         let (raw, truncated) = read_text(path)?;
         let binary = raw.contains('\u{0}');
         let crlf = raw.contains("\r\n");
-        let text = if binary { "Fichier binaire : aperçu indisponible.".to_owned() } else { raw.replace("\r\n", "\n") };
+        let text = if binary { tr("Fichier binaire : aperçu indisponible.", "Binary file: no preview.").to_owned() } else { raw.replace("\r\n", "\n") };
         Ok(Self {
             path: path.to_owned(),
             buffer: text.clone(),
@@ -161,9 +162,9 @@ pub fn panel(app: &mut App, ui: &mut Ui) {
     app.files.root = Some(root.clone());
     ui.horizontal(|ui| {
         ui.set_height(30.0);
-        ui.label(RichText::new("Fichiers").font(theme::bold(16.5)).color(TEXT));
+        ui.label(RichText::new(tr("Fichiers", "Files")).font(theme::bold(16.5)).color(TEXT));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::icon_button(ui, Icon::Refresh, "Relire le dossier").clicked() {
+            if widgets::icon_button(ui, Icon::Refresh, tr("Relire le dossier", "Reload the folder")).clicked() {
                 app.files.invalidate();
             }
         });
@@ -270,7 +271,7 @@ pub fn tabs(app: &mut App, ui: &mut Ui) -> bool {
                 }
             }
             ui.add_space(4.0);
-            if widgets::pill(ui, Some(Icon::Close), "Tout fermer", FAINT, false).clicked() {
+            if widgets::pill(ui, Some(Icon::Close), tr("Tout fermer", "Close all"), FAINT, false).clicked() {
                 close = Some(usize::MAX);
             }
         });
@@ -281,12 +282,12 @@ pub fn tabs(app: &mut App, ui: &mut Ui) -> bool {
             app.files.open.retain(OpenFile::dirty);
             app.files.active = (!app.files.open.is_empty()).then_some(0);
             if !app.files.open.is_empty() {
-                app.notify("Onglets non enregistrés gardés ouverts (Ctrl+S pour enregistrer)");
+                app.notify(tr("Onglets non enregistrés gardés ouverts (Ctrl+S pour enregistrer)", "Unsaved tabs kept open (Ctrl+S to save)"));
             }
         }
         (Some(i), _) if app.files.open.get(i).is_some_and(OpenFile::dirty) => {
             app.files.active = Some(i);
-            app.notify("Modifications non enregistrées : Ctrl+S pour enregistrer, ou « Annuler les modifications »");
+            app.notify(tr("Modifications non enregistrées : Ctrl+S pour enregistrer, ou « Annuler les modifications »", "Unsaved changes: Ctrl+S to save, or “Discard changes”"));
         }
         (Some(i), _) => app.files.close(i),
         (None, Some(i)) => app.files.active = Some(i),
@@ -304,7 +305,7 @@ fn tab(ui: &mut Ui, name: &str, active: bool) -> Option<bool> {
     let galley = widgets::line(ui, name, FontId::proportional(12.5), if active { TEXT } else { MUTED }, 200.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 62.0, 32.0), Sense::click());
     let close_rect = Rect::from_center_size(rect.right_center() - vec2(15.0, 0.0), vec2(20.0, 20.0));
-    let close = ui.interact(close_rect, resp.id.with("close"), Sense::click()).on_hover_text("Fermer l'onglet");
+    let close = ui.interact(close_rect, resp.id.with("close"), Sense::click()).on_hover_text(tr("Fermer l'onglet", "Close tab"));
     let k = ui.ctx().animate_bool_with_time(resp.id, resp.hovered() || close.hovered(), 0.12);
     let p = ui.painter();
     let fill = if active { TILE_ACTIVE } else { TILE_HOVER.gamma_multiply(k) };
@@ -350,34 +351,34 @@ pub fn viewer(app: &mut App, ui: &mut Ui) {
         icons::paint(ui.painter(), rect, icon, color);
         ui.label(RichText::new(&rel).font(theme::bold(14.0)).color(TEXT)).on_hover_text(file.path.display().to_string());
         if file.truncated {
-            widgets::chip(ui, "tronqué à 512 Ko · lecture seule", AMBER);
+            widgets::chip(ui, tr("tronqué à 512 Ko · lecture seule", "truncated to 512 KB · read-only"), AMBER);
         }
         if file.dirty() {
-            widgets::chip(ui, "non enregistré", AMBER);
+            widgets::chip(ui, tr("non enregistré", "unsaved"), AMBER);
         }
         if file.stale {
-            widgets::chip_icon(ui, Some(Icon::Alert), "modifié sur le disque", RED);
+            widgets::chip_icon(ui, Some(Icon::Alert), tr("modifié sur le disque", "changed on disk"), RED);
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if widgets::pill(ui, Some(Icon::Close), "Fermer", MUTED, false).clicked() {
+            if widgets::pill(ui, Some(Icon::Close), tr("Fermer", "Close"), MUTED, false).clicked() {
                 command = Some(Command::Close);
             }
-            if widgets::pill(ui, Some(Icon::Copy), "Copier", MUTED, false).on_hover_text("Copier le contenu").clicked() {
+            if widgets::pill(ui, Some(Icon::Copy), tr("Copier", "Copy"), MUTED, false).on_hover_text(tr("Copier le contenu", "Copy the content")).clicked() {
                 command = Some(Command::Copy);
             }
-            if file.stale && widgets::pill(ui, Some(Icon::Refresh), "Recharger le disque", RED, false).clicked() {
+            if file.stale && widgets::pill(ui, Some(Icon::Refresh), tr("Recharger le disque", "Reload from disk"), RED, false).clicked() {
                 command = Some(Command::Reload);
             }
             if file.dirty() {
-                if widgets::pill(ui, Some(Icon::Undo), "Annuler les modifications", MUTED, false).clicked() {
+                if widgets::pill(ui, Some(Icon::Undo), tr("Annuler les modifications", "Discard changes"), MUTED, false).clicked() {
                     command = Some(Command::Revert);
                 }
-                if widgets::pill(ui, Some(Icon::Check), "Enregistrer (Ctrl+S)", GREEN, true).clicked() {
+                if widgets::pill(ui, Some(Icon::Check), tr("Enregistrer (Ctrl+S)", "Save (Ctrl+S)"), GREEN, true).clicked() {
                     command = Some(Command::Save);
                 }
             }
-            if file.editable() && !file.editing && widgets::pill(ui, Some(Icon::Pencil), "Modifier", ACCENT_HI, false).clicked() {
+            if file.editable() && !file.editing && widgets::pill(ui, Some(Icon::Pencil), tr("Modifier", "Edit"), ACCENT_HI, false).clicked() {
                 command = Some(Command::Edit);
             }
         });
@@ -400,13 +401,13 @@ pub fn viewer(app: &mut App, ui: &mut Ui) {
     let file = &mut app.files.open[index];
     match command {
         Some(Command::Close) if file.dirty() => {
-            app.notify("Modifications non enregistrées : enregistrez ou annulez-les avant de fermer");
+            app.notify(tr("Modifications non enregistrées : enregistrez ou annulez-les avant de fermer", "Unsaved changes: save or discard them before closing"));
         }
         Some(Command::Close) => app.files.close(index),
         Some(Command::Copy) => {
             let raw = file.buffer.clone();
             ui.ctx().copy_text(raw);
-            app.notify("Contenu copié");
+            app.notify(tr("Contenu copié", "Content copied"));
         }
         Some(Command::Edit) => file.editing = true,
         Some(Command::Revert) => {
@@ -422,9 +423,9 @@ pub fn viewer(app: &mut App, ui: &mut Ui) {
             Ok(()) => {
                 let name = short(&file.path, &root);
                 app.files.cache.clear();
-                app.notify(format!("Enregistré : {name}"));
+                app.notify(format!("{} {name}", tr("Enregistré :", "Saved:")));
             }
-            Err(e) => app.notify(format!("Enregistrement impossible : {e}")),
+            Err(e) => app.notify(format!("{} {e}", tr("Enregistrement impossible :", "Cannot save:"))),
         },
         None => {}
     }

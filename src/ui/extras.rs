@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use eframe::egui::{Context, Ui};
 
 use super::{
-    App, attach,
+    App,
+    i18n::tr, attach,
     composer::{effort_label, engine_short},
     docs::{self, MAX_DOCS},
     icons::Icon,
@@ -40,7 +41,7 @@ impl App {
     fn add_doc(&mut self, doc: Result<docs::Doc, String>) {
         match doc {
             Err(e) => self.notify(e),
-            Ok(_) if self.docs.len() >= MAX_DOCS => self.notify(format!("{MAX_DOCS} fichiers max par message")),
+            Ok(_) if self.docs.len() >= MAX_DOCS => self.notify(format!("{MAX_DOCS} {}", tr("fichiers max par message", "files max per message"))),
             Ok(d) if self.docs.contains(&d) => {}
             Ok(d) => self.docs.push(d),
         }
@@ -55,9 +56,9 @@ pub fn doc_chips(app: &mut App, ui: &mut Ui) {
     let mut remove = None;
     ui.horizontal_wrapped(|ui| {
         for (i, doc) in app.docs.iter().enumerate() {
-            let label = format!("{} · {} lignes", doc.name, doc.text.lines().count());
+            let label = format!("{} · {} {}", doc.name, doc.text.lines().count(), tr("lignes", "lines"));
             widgets::chip_icon(ui, Some(Icon::File), label, SOFT);
-            if widgets::icon_button(ui, Icon::Close, "Retirer ce fichier").clicked() {
+            if widgets::icon_button(ui, Icon::Close, tr("Retirer ce fichier", "Remove this file")).clicked() {
                 remove = Some(i);
             }
         }
@@ -72,8 +73,10 @@ pub fn doc_chips(app: &mut App, ui: &mut Ui) {
 pub fn live_pills(app: &App, ui: &mut Ui) {
     let Some(live) = app.current.and_then(|id| app.live.get(&id)) else { return };
     let mode = app.settings.auth_mode(live.engine);
-    let tip =
-        "Choisi automatiquement pour cette tâche (modèle auto, délégation, effort Jev) — modifiable une fois le tour terminé";
+    let tip = tr(
+        "Choisi automatiquement pour cette tâche (modèle auto, délégation, effort Jev) — modifiable une fois le tour terminé",
+        "Picked automatically for this task (auto model, delegation, Jev effort) — editable once the turn ends",
+    );
     let changed = live.model != app.settings.model(live.engine) || live.engine != app.settings.engine;
     let color = |moved: bool| if moved { CYAN } else { FAINT };
     widgets::chip_icon(ui, Some(Icon::Bolt), engine_short(live.engine, mode), color(live.engine != app.settings.engine))

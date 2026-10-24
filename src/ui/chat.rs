@@ -10,7 +10,8 @@ use egui_commonmark::CommonMarkCache;
 use uuid::Uuid;
 
 use super::{
-    App, Live, attach, cards, files, fx,
+    App, Live,
+    i18n::{english, tr}, attach, cards, files, fx,
     icons::{self, Icon},
     markdown,
     theme::{self, ACCENT, ACCENT_HI, CYAN, EDGE, EDGE_HI, FAINT, GREEN, INDIGO, MUTED, PINK, RED, SOFT, TEXT, TILE, TILE_HOVER},
@@ -92,38 +93,41 @@ fn top_bar(app: &mut App, ui: &mut Ui) {
     let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
     let mut right = ui.new_child(UiBuilder::new().max_rect(bar).layout(Layout::right_to_left(Align::Center)));
     right.spacing_mut().item_spacing.x = 4.0;
-    if widgets::pill(&mut right, Some(Icon::PanelRight), "Outils", MUTED, app.show_panel)
-        .on_hover_text("Afficher/masquer le panneau des outils")
+    if widgets::pill(&mut right, Some(Icon::PanelRight), tr("Outils", "Tools"), MUTED, app.show_panel)
+        .on_hover_text(tr("Afficher/masquer le panneau des outils", "Show/hide the tools panel"))
         .clicked()
     {
         app.show_panel = !app.show_panel;
     }
     let pending = app.jobs.iter().filter(|j| j.pending() && !j.paused).count();
-    let tasks = if pending > 0 { format!("Tâches ({pending})") } else { "Tâches".to_owned() };
+    let tasks = if pending > 0 { format!("{} ({pending})", tr("Tâches", "Tasks")) } else { tr("Tâches", "Tasks").to_owned() };
     if widgets::pill(&mut right, Some(Icon::Clock), &tasks, MUTED, app.show_tasks)
-        .on_hover_text("Toutes les tâches programmées (/tasks)")
+        .on_hover_text(tr("Toutes les tâches programmées (/tasks)", "All scheduled tasks (/tasks)"))
         .clicked()
     {
         app.show_tasks = !app.show_tasks;
     }
-    if widgets::pill(&mut right, Some(Icon::PanelLeft), "Fichiers", MUTED, app.files.show)
-        .on_hover_text("Arborescence du dossier de travail")
+    if widgets::pill(&mut right, Some(Icon::PanelLeft), tr("Fichiers", "Files"), MUTED, app.files.show)
+        .on_hover_text(tr("Arborescence du dossier de travail", "Workspace file tree"))
         .clicked()
     {
         files::toggle(app);
     }
     if let Some(id) = app.current.filter(|id| app.conv(*id).is_some_and(|c| !c.messages.is_empty()))
-        && widgets::pill(&mut right, Some(Icon::Download), "Exporter", MUTED, false)
-            .on_hover_text("Exporter la discussion en Markdown")
+        && widgets::pill(&mut right, Some(Icon::Download), tr("Exporter", "Export"), MUTED, false)
+            .on_hover_text(tr("Exporter la discussion en Markdown", "Export the chat as Markdown"))
             .clicked()
     {
         app.export(id);
     }
     if app.env.jev.is_none() {
         right.add_space(6.0);
-        if widgets::chip_icon(&mut right, Some(Icon::Alert), "Jev inactif : ajoutez la clé", RED)
+        if widgets::chip_icon(&mut right, Some(Icon::Alert), tr("Jev inactif : ajoutez la clé", "Jev inactive: add the key"), RED)
             .interact(Sense::click())
-            .on_hover_text("Sans clé Jev, le routage se fait par heuristique locale. Cliquer pour ouvrir les paramètres.")
+            .on_hover_text(tr(
+                "Sans clé Jev, le routage se fait par heuristique locale. Cliquer pour ouvrir les paramètres.",
+                "Without a Jev key, routing uses local heuristics. Click to open the settings.",
+            ))
             .on_hover_cursor(eframe::egui::CursorIcon::PointingHand)
             .clicked()
         {
@@ -141,7 +145,7 @@ fn top_bar(app: &mut App, ui: &mut Ui) {
         let u = c.usage;
         format!("{} tokens · cache {:.0} %", widgets::human(u.prompt + u.completion), u.cache_ratio() * 100.0)
     });
-    let title = app.current_conv().map_or("Nouvelle discussion", |c| c.title.as_str()).to_owned();
+    let title = app.current_conv().map_or(tr("Nouvelle discussion", "New chat"), |c| c.title.as_str()).to_owned();
     // The title keeps priority: the usage chip (also in the tools panel), then the model chip, give way first.
     let natural = left.painter().layout_no_wrap(title.clone(), theme::bold(15.5), TEXT).size().x;
     let wanted = natural.min(260.0);
@@ -160,11 +164,16 @@ fn top_bar(app: &mut App, ui: &mut Ui) {
     }
     left.add_space(4.0);
     if show_model {
-        widgets::chip_icon(&mut left, Some(Icon::Bolt), model_name, CYAN).on_hover_text(format!(
-            "{} · modèle {model} · effort {}\nCliquer sur le sélecteur de la zone de saisie pour changer",
-            engine.label(),
-            effort.label()
-        ));
+        let tip = if english() {
+            format!("{} · model {model} · effort {}\nUse the picker in the input box to change", engine.label(), effort.label())
+        } else {
+            format!(
+                "{} · modèle {model} · effort {}\nCliquer sur le sélecteur de la zone de saisie pour changer",
+                engine.label(),
+                effort.label()
+            )
+        };
+        widgets::chip_icon(&mut left, Some(Icon::Bolt), model_name, CYAN).on_hover_text(tip);
     }
     if let Some(u) = usage {
         widgets::chip(&mut left, u, MUTED);
@@ -269,24 +278,34 @@ fn user(ui: &mut Ui, i: usize, m: &Message, busy: bool, tex: &mut HashMap<u64, e
     } else {
         ui.painter().layout(m.content.clone(), FontId::proportional(14.5), TEXT, wrap).size().x.ceil()
     };
-    let width = (text_w.max(if m.images.is_empty() { 0.0 } else { 230.0 }) + PAD).min(ui.available_width() * 0.85);
+    // Thumbnails sit in one wrapped row above the text: the bubble is at least as wide as that row.
+    const THUMB: f32 = 150.0;
+    let images_w = if m.images.is_empty() { 0.0 } else { m.images.len() as f32 * (THUMB + 8.0) - 8.0 };
+    let width = (text_w.max(images_w) + PAD).min(ui.available_width() * 0.85);
     let bubble = ui
         .horizontal_top(|ui| {
             ui.add_space((ui.available_width() - width).max(0.0));
             let bg = ui.painter().add(Shape::Noop);
             let frame = Frame::new().inner_margin(Margin::symmetric(16, 11)).show(ui, |ui| {
-                ui.set_max_width(width - PAD);
-                if !m.content.trim().is_empty() {
-                    ui.add(Label::new(text).wrap().selectable(true));
-                }
-                if !m.images.is_empty() {
-                    let ctx = ui.ctx().clone();
-                    ui.horizontal_wrapped(|ui| {
-                        for img in &m.images {
-                            attach::thumb(ui, &ctx, tex, img, 150.0, false);
+                // The frame inherits the row's left-to-right layout: stack its content explicitly.
+                ui.vertical(|ui| {
+                    ui.set_max_width(width - PAD);
+                    if !m.images.is_empty() {
+                        let ctx = ui.ctx().clone();
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+                            for img in &m.images {
+                                attach::thumb(ui, &ctx, tex, img, THUMB.min(width - PAD), false);
+                            }
+                        });
+                        if !m.content.trim().is_empty() {
+                            ui.add_space(8.0);
                         }
-                    });
-                }
+                    }
+                    if !m.content.trim().is_empty() {
+                        ui.add(Label::new(text).wrap().selectable(true));
+                    }
+                });
             });
             let rect = frame.response.rect;
             let radius = CornerRadius { nw: 18, ne: 6, sw: 18, se: 18 };
@@ -320,14 +339,17 @@ fn user(ui: &mut Ui, i: usize, m: &Message, busy: bool, tex: &mut HashMap<u64, e
                 if m.checkpoint
                     && widgets::icon_button_sized(ui, Icon::Undo, 26.0, MUTED, false)
                         .on_hover_text(
-                            "Restaurer les fichiers modifiés par ce tour et les suivants (pas les effets des commandes shell)",
+                            tr(
+                                "Restaurer les fichiers modifiés par ce tour et les suivants (pas les effets des commandes shell)",
+                                "Restore the files changed by this turn and the next ones (not shell command effects)",
+                            ),
                         )
                         .clicked()
                 {
                     action = Some(Action::Undo(i));
                 }
                 if widgets::icon_button_sized(ui, Icon::Pencil, 26.0, MUTED, false)
-                    .on_hover_text("Modifier ce message et relancer à partir d'ici")
+                    .on_hover_text(tr("Modifier ce message et relancer à partir d'ici", "Edit this message and rerun from here"))
                     .clicked()
                 {
                     action = Some(Action::Edit(i));
@@ -344,11 +366,11 @@ fn user(ui: &mut Ui, i: usize, m: &Message, busy: bool, tex: &mut HashMap<u64, e
 fn route_chips(ui: &mut Ui, r: &Route) {
     let (source, color) = match r.source {
         Source::Jev => (format!("Jev {:.0} %", r.confidence * 100.0), CYAN),
-        Source::Local => ("routage local".to_owned(), MUTED),
+        Source::Local => (tr("routage local", "local routing").to_owned(), MUTED),
     };
     widgets::chip_icon(ui, Some(if r.source == Source::Jev { Icon::Bolt } else { Icon::Gear }), source, color);
     if r.risky() {
-        widgets::chip_icon(ui, Some(Icon::Shield), "sécurité", RED);
+        widgets::chip_icon(ui, Some(Icon::Shield), tr("sécurité", "security"), RED);
     }
     if r.needs_apps() {
         widgets::chip_icon(ui, Some(Icon::Cube), "apps", GREEN);
@@ -433,8 +455,8 @@ fn assistant(
         }
         if can_regenerate {
             ui.add_space(2.0);
-            return widgets::pill(ui, Some(Icon::Refresh), "Régénérer", MUTED, false)
-                .on_hover_text("Annule ce tour (fichiers compris) et le relance")
+            return widgets::pill(ui, Some(Icon::Refresh), tr("Régénérer", "Regenerate"), MUTED, false)
+                .on_hover_text(tr("Annule ce tour (fichiers compris) et le relance", "Undo this turn (files included) and run it again"))
                 .clicked()
                 .then_some(Action::Regenerate);
         }
@@ -473,7 +495,7 @@ fn reasoning(ui: &mut Ui, i: usize, m: &Message) -> f32 {
     let fg = fx::mix(MUTED, TEXT, k);
     icons::chevron(p, rect.left_center() + vec2(12.0, 0.0), 13.0, open, fg);
     icons::at(p, rect.left_center() + vec2(32.0, 0.0), 15.0, Icon::Bubble, fx::mix(MUTED, ACCENT_HI, k));
-    let label = widgets::line(ui, format!("Raisonnement · {words} mots"), FontId::proportional(12.5), fg, rect.width() - 60.0);
+    let label = widgets::line(ui, format!("{} · {words} {}", tr("Raisonnement", "Reasoning"), tr("mots", "words")), FontId::proportional(12.5), fg, rect.width() - 60.0);
     ui.painter().galley(rect.left_center() + vec2(46.0, -label.size().y / 2.0), label, fg);
     state.show_body_unindented(ui, |ui| {
         let frame = Frame::new().inner_margin(Margin { left: 16, right: 12, top: 4, bottom: 8 }).show(ui, |ui| {
@@ -504,7 +526,7 @@ fn streaming(ui: &mut Ui, md: &mut CommonMarkCache, live: &Live, step: Step, t: 
                     ui.set_width(ui.available_width());
                     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
                     fx::spinner(ui.painter(), rect.left_center() + vec2(8.0, 0.0), 6.0, 2.0, t);
-                    let job = fx::shimmer("Réflexion…", FontId::proportional(12.5), MUTED, TEXT, t);
+                    let job = fx::shimmer(tr("Réflexion…", "Thinking…"), FontId::proportional(12.5), MUTED, TEXT, t);
                     let galley = ui.painter().layout_job(job);
                     ui.painter().galley(rect.left_center() + vec2(24.0, -galley.size().y / 2.0), galley, MUTED);
                     ui.add_space(4.0);
@@ -516,7 +538,7 @@ fn streaming(ui: &mut Ui, md: &mut CommonMarkCache, live: &Live, step: Step, t: 
         if live.text.is_empty() && live.reasoning.is_empty() {
             let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
             fx::spinner(ui.painter(), rect.left_center() + vec2(10.0, 0.0), 7.0, 2.2, t);
-            let job = fx::shimmer("Omega travaille…", FontId::proportional(13.5), MUTED, Color32::WHITE, t);
+            let job = fx::shimmer(tr("Omega travaille…", "Omega is working…"), FontId::proportional(13.5), MUTED, Color32::WHITE, t);
             let galley = ui.painter().layout_job(job);
             ui.painter().galley(rect.left_center() + vec2(28.0, -galley.size().y / 2.0), galley, MUTED);
             dots.push(rect.center().y);
@@ -527,12 +549,43 @@ fn streaming(ui: &mut Ui, md: &mut CommonMarkCache, live: &Live, step: Step, t: 
     });
 }
 
-const SUGGESTIONS: [(Icon, Color32, &str, &str); 4] = [
-    (Icon::Shield, RED, "Audit de sécurité", "Audite la sécurité de mon projet et classe les failles par sévérité."),
-    (Icon::Flask, GREEN, "TDD", "Écris les tests puis implémente une fonction Rust qui valide un IBAN."),
-    (Icon::Globe, CYAN, "Recherche web", "Quelles sont les nouveautés de la dernière version stable de Rust ?"),
-    (Icon::Layers, PINK, "Architecture", "Propose une architecture DDD pour une API de réservation en Rust."),
-];
+fn suggestions() -> [(Icon, Color32, &'static str, &'static str); 4] {
+    [
+        (
+            Icon::Shield,
+            RED,
+            tr("Audit de sécurité", "Security audit"),
+            tr(
+                "Audite la sécurité de mon projet et classe les failles par sévérité.",
+                "Audit my project's security and rank the flaws by severity.",
+            ),
+        ),
+        (
+            Icon::Flask,
+            GREEN,
+            "TDD",
+            tr(
+                "Écris les tests puis implémente une fonction Rust qui valide un IBAN.",
+                "Write the tests, then implement a Rust function that validates an IBAN.",
+            ),
+        ),
+        (
+            Icon::Globe,
+            CYAN,
+            tr("Recherche web", "Web search"),
+            tr("Quelles sont les nouveautés de la dernière version stable de Rust ?", "What is new in the latest stable Rust release?"),
+        ),
+        (
+            Icon::Layers,
+            PINK,
+            "Architecture",
+            tr(
+                "Propose une architecture DDD pour une API de réservation en Rust.",
+                "Propose a DDD architecture for a booking API in Rust.",
+            ),
+        ),
+    ]
+}
 
 fn empty(app: &mut App, ui: &mut Ui) {
     let t = fx::now(ui.ctx());
@@ -541,17 +594,25 @@ fn empty(app: &mut App, ui: &mut Ui) {
         let (rect, _) = ui.allocate_exact_size(vec2(84.0, 84.0), Sense::hover());
         widgets::paint_logo(ui.painter(), rect.translate(vec2(0.0, -3.0 * fx::pulse(t, 5.0))), t);
         ui.add_space(22.0);
-        let title = "Que construisons-nous aujourd'hui ?";
+        let title = tr("Que construisons-nous aujourd'hui ?", "What are we building today?");
         let from = Color32::from_rgb(0xED, 0xE9, 0xFE);
         ui.label(fx::gradient_text(title, theme::bold(30.0), from, Color32::from_rgb(0xA5, 0xF3, 0xFC)));
         ui.add_space(6.0);
         let (engine, effort) = (app.settings.engine, app.settings.effort.get(app.settings.engine));
         let model = app.settings.model(engine).to_owned();
-        let tagline = format!(
-            "Jev décide · {} ({model}) exécute (effort {}) · tout reste local et anonyme",
-            models::name(engine, &model),
-            effort.label()
-        );
+        let tagline = if english() {
+            format!(
+                "Jev decides · {} ({model}) executes (effort {}) · everything stays local and anonymous",
+                models::name(engine, &model),
+                effort.label()
+            )
+        } else {
+            format!(
+                "Jev décide · {} ({model}) exécute (effort {}) · tout reste local et anonyme",
+                models::name(engine, &model),
+                effort.label()
+            )
+        };
         ui.label(RichText::new(tagline).size(14.0).color(MUTED));
         ui.add_space(32.0);
     });
@@ -559,7 +620,7 @@ fn empty(app: &mut App, ui: &mut Ui) {
     let card_w = ((ui.available_width().min(theme::COLUMN) - gap) / 2.0).min(340.0);
     let (grid, _) = ui.allocate_exact_size(vec2(ui.available_width(), 92.0 * 2.0 + gap), Sense::hover());
     let left = grid.center().x - card_w - gap / 2.0;
-    for (i, (icon, color, title, prompt)) in SUGGESTIONS.iter().enumerate() {
+    for (i, (icon, color, title, prompt)) in suggestions().iter().enumerate() {
         let x = left + (i % 2) as f32 * (card_w + gap);
         let y = grid.top() + (i / 2) as f32 * (92.0 + gap);
         let rect = Rect::from_min_size(pos2(x, y), vec2(card_w, 92.0));

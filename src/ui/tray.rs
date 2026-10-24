@@ -8,7 +8,7 @@ use std::sync::{
 
 use eframe::egui::{Context, ViewportCommand};
 
-use super::App;
+use super::{App, i18n::tr};
 use crate::infra::{
     autostart,
     tray::{self, TrayEvent, TrayIcon},
@@ -33,7 +33,7 @@ impl App {
     pub(super) fn apply_system(&mut self, ctx: &Context) {
         self.sync_tray(ctx);
         if let Err(e) = autostart::apply(self.settings.autostart) {
-            self.notify(format!("Démarrage avec Windows : {e:#}"));
+            self.notify(format!("{} : {e:#}", tr("Démarrage avec Windows", "Start with Windows")));
         }
     }
 

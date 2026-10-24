@@ -2,7 +2,8 @@
 
 use eframe::egui::{Align, Color32, FontId, Layout, Rect, ScrollArea, Sense, Ui, pos2, vec2};
 
-use super::{i18n::tr, 
+use super::{
+    i18n::{english, tr},
     App, fx,
     icons::{self, Icon},
     theme::{self, ACCENT, ACCENT_HI, AMBER, CYAN, EDGE, FAINT, GREEN, INDIGO, MUTED, RED, SOFT, TEXT, TILE_HOVER},
@@ -24,10 +25,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         let ok = app.health.iter().filter(|h| h.ok).count();
         if !app.health.is_empty() {
             let color = if ok == app.health.len() { GREEN } else { AMBER };
-            widgets::chip(ui, format!("{ok}/{} actifs", app.health.len()), color);
+            widgets::chip(ui, format!("{ok}/{} {}", app.health.len(), tr("actifs", "active")), color);
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::icon_button(ui, Icon::Refresh, "Relancer les auto-tests").clicked() {
+            if widgets::icon_button(ui, Icon::Refresh, tr("Relancer les auto-tests", "Re-run self-tests")).clicked() {
                 app.refresh_health();
             }
         });
@@ -37,7 +38,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         tools(app, ui);
         live_tests(app, ui);
         super::memory::show(app, ui, heading);
-        super::toolbox::show(app, ui, heading);
+        super::toolbox::show(app, ui);
         engine(app, ui);
         network(app, ui);
         economy(app, ui);
@@ -54,28 +55,62 @@ fn live_tests(app: &App, ui: &mut Ui) {
     }
     heading(ui, tr("Tests en continu", "Live tests"));
     let Some(status) = crate::tools::livetest::current(&app.env.workspace()).map(|r| r.status()) else {
-        row(ui, true, "En attente", "démarre au premier tour qui touche au code");
+        row(ui, true, tr("En attente", "Waiting"), tr("démarre au premier tour qui touche au code", "starts on the first turn that touches code"));
         return;
     };
     let how = match status.mode {
-        crate::tools::livetest::Mode::Native => "watcher natif",
-        crate::tools::livetest::Mode::Builtin => "watcher Omega",
+        crate::tools::livetest::Mode::Native => tr("watcher natif", "native watcher"),
+        crate::tools::livetest::Mode::Builtin => tr("watcher Omega", "Omega watcher"),
     };
     let (ok, detail) = match (&status.error, &status.last, status.running) {
         (Some(e), _, _) => (false, e.clone()),
-        (None, _, true) => (true, format!("{how} · exécution en cours…")),
+        (None, _, true) => (true, format!("{how} · {}", tr("exécution en cours…", "running…"))),
         (None, Some(last), false) => {
             let ago = last.finished.elapsed().as_secs();
-            (last.ok, format!("{how} · {} il y a {ago} s", if last.ok { "vert" } else { "échec" }))
+            (
+                last.ok,
+                if english() {
+                    format!("{how} · {} {ago} s ago", if last.ok { "green" } else { "failed" })
+                } else {
+                    format!("{how} · {} il y a {ago} s", if last.ok { "vert" } else { "échec" })
+                },
+            )
         }
-        (None, None, false) => (true, format!("{how} · pas encore de résultat")),
+        (None, None, false) => (true, format!("{how} · {}", tr("pas encore de résultat", "no result yet"))),
     };
     row(ui, ok, status.plugin, &detail);
     if let Some(hint) = status.hint {
-        ui.label(widgets::text(format!("Watcher natif plus rapide : {hint}"), 10.5, FAINT));
+        ui.label(widgets::text(format!("{} {hint}", tr("Watcher natif plus rapide :", "Faster native watcher:")), 10.5, FAINT));
     }
     if let Some(last) = status.last.as_ref().filter(|l| !l.ok) {
         ui.label(widgets::text(crate::tools::compress::clip(&last.summary, 600), 10.5, FAINT));
+    }
+}
+
+/// Self-test groups and names are French in the runtime: their English label, when the interface is in English.
+fn health_label(fr: &'static str) -> &'static str {
+    if !english() {
+        return fr;
+    }
+    match fr {
+        "Moteurs IA" => "AI engines",
+        "Économie tokens" => "Token savings",
+        "Sécurité" => "Security",
+        "Délégation Flash" => "Flash delegation",
+        "Graphe d'impact" => "Impact graph",
+        "Moteur ripgrep" => "ripgrep engine",
+        "Compresseur RTK" => "RTK compressor",
+        "Encodeur TOON" => "TOON encoder",
+        "Cache préfixe KV" => "KV prefix cache",
+        "Style de sortie" => "Output style",
+        "Règles projet" => "Project rules",
+        "Kits design & web" => "Design & web kits",
+        "Tests en continu" => "Live tests",
+        "Recherche anonyme" => "Anonymous search",
+        "Web local (BM25)" => "Local web (BM25)",
+        "Scanner statique" => "Static scanner",
+        "Garde shell + sandbox" => "Shell guard + sandbox",
+        other => other,
     }
 }
 
@@ -126,15 +161,15 @@ fn tools(app: &mut App, ui: &mut Ui) {
     let mut create_rules = false;
     for h in &app.health {
         if h.group != group {
-            heading(ui, h.group);
+            heading(ui, health_label(h.group));
             group = h.group;
         }
-        row(ui, h.ok, h.name, &h.detail);
+        row(ui, h.ok, health_label(h.name), &h.detail);
         if h.name == health::RULES_CHECK && !h.ok {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.add_space(22.0);
-                create_rules = widgets::pill(ui, Some(Icon::Plus), "Créer OMEGA.md (modèle)", ACCENT_HI, false).clicked();
+                create_rules = widgets::pill(ui, Some(Icon::Plus), tr("Créer OMEGA.md (modèle)", "Create OMEGA.md (template)"), ACCENT_HI, false).clicked();
             });
             ui.add_space(2.0);
         }
@@ -151,8 +186,8 @@ fn engine(app: &App, ui: &mut Ui) {
     let model = app.settings.model(engine).to_owned();
     let effort = app.settings.effort.get(engine);
     let mode = match app.settings.auth_mode(engine) {
-        AuthMode::Subscription if engine.subscription_capable() => "abonnement",
-        _ => "clé API",
+        AuthMode::Subscription if engine.subscription_capable() => tr("abonnement", "subscription"),
+        _ => tr("clé API", "API key"),
     };
     widgets::card(ui, EDGE, |ui| {
         ui.set_width(ui.available_width());
@@ -189,24 +224,24 @@ fn network(app: &App, ui: &mut Ui) {
                 .flatten()
                 .collect::<Vec<_>>()
                 .join(" · ");
-            row(ui, v.active, "VPN", if detail.is_empty() { "aucun tunnel détecté" } else { &detail });
+            row(ui, v.active, "VPN", if detail.is_empty() { tr("aucun tunnel détecté", "no tunnel detected") } else { &detail });
         }
-        None => row(ui, false, "VPN", "détection…"),
+        None => row(ui, false, "VPN", tr("détection…", "detecting…")),
     }
     let proxy = app.settings.proxy.trim();
-    row(ui, !proxy.is_empty(), "Proxy / Tor", if proxy.is_empty() { "connexion directe" } else { proxy });
-    row(ui, true, "Télémétrie", "aucune · données 100 % locales");
+    row(ui, !proxy.is_empty(), "Proxy / Tor", if proxy.is_empty() { tr("connexion directe", "direct connection") } else { proxy });
+    row(ui, true, tr("Télémétrie", "Telemetry"), tr("aucune · données 100 % locales", "none · data 100 % local"));
     row(
         ui,
         !app.settings.bypass,
-        "Autorisations",
-        if app.settings.bypass { "BYPASS : tout est accepté sans demander" } else { "demandées pour les actions risquées" },
+        tr("Autorisations", "Permissions"),
+        if app.settings.bypass { tr("BYPASS : tout est accepté sans demander", "BYPASS: everything accepted without asking") } else { tr("demandées pour les actions risquées", "asked for risky actions") },
     );
     row(
         ui,
         app.settings.require_vpn,
         "Kill-switch VPN",
-        if app.settings.require_vpn { "envoi bloqué sans VPN" } else { "désactivé" },
+        if app.settings.require_vpn { tr("envoi bloqué sans VPN", "sending blocked without VPN") } else { tr("désactivé", "off") },
     );
 }
 
@@ -225,24 +260,24 @@ fn economy(app: &App, ui: &mut Ui) {
     widgets::card(ui, EDGE, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 3.0;
-        line(ui, "Entrée", widgets::human(u.prompt));
-        line(ui, "Sortie", widgets::human(u.completion));
-        line(ui, "Raisonnement", widgets::human(u.reasoning));
-        line(ui, "Jev (contrôle)", widgets::human(u.jev));
-        line(ui, "Écrit en cache", widgets::human(u.written));
+        line(ui, tr("Entrée", "Input"), widgets::human(u.prompt));
+        line(ui, tr("Sortie", "Output"), widgets::human(u.completion));
+        line(ui, tr("Raisonnement", "Reasoning"), widgets::human(u.reasoning));
+        line(ui, tr("Jev (contrôle)", "Jev (control)"), widgets::human(u.jev));
+        line(ui, tr("Écrit en cache", "Written to cache"), widgets::human(u.written));
         if conv.savings.requests > 0 {
-            line(ui, "Économie mesurée", format!("{:.0} % de l'entrée", conv.savings.saved_share() * 100.0));
+            line(ui, tr("Économie mesurée", "Measured savings"), format!("{:.0} % {}", conv.savings.saved_share() * 100.0, tr("de l'entrée", "of input")));
         }
-        line(ui, "Outils chargés", conv.toolset.len().to_string());
-        line(ui, "Contexte actuel", format!("{} / {}", widgets::human(conv.context), widgets::human(app.settings.compact_at)));
+        line(ui, tr("Outils chargés", "Tools loaded"), conv.toolset.len().to_string());
+        line(ui, tr("Contexte actuel", "Current context"), format!("{} / {}", widgets::human(conv.context), widgets::human(app.settings.compact_at)));
         if let Some(s) = &conv.summary {
-            line(ui, "Résumé actif", format!("{} msg condensés", s.upto));
+            line(ui, tr("Résumé actif", "Active summary"), format!("{} {}", s.upto, tr("msg condensés", "msgs condensed")));
         }
         ui.add_space(8.0);
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
         let p = ui.painter();
         p.text(rect.left_center(), eframe::egui::Align2::LEFT_CENTER, "Cache KV", FontId::proportional(12.0), CYAN);
-        let ratio = format!("{:.0} % de l'entrée", u.cache_ratio() * 100.0);
+        let ratio = format!("{:.0} % {}", u.cache_ratio() * 100.0, tr("de l'entrée", "of input"));
         p.text(rect.right_center(), eframe::egui::Align2::RIGHT_CENTER, ratio, FontId::monospace(11.5), CYAN);
         ui.add_space(2.0);
         widgets::bar(ui, u.cache_ratio(), CYAN, 6.0);
@@ -280,10 +315,10 @@ fn verdict(app: &App, ui: &mut Ui) {
         });
         ui.add_space(2.0);
         ui.horizontal(|ui| {
-            ui.label(widgets::text("confiance", 11.0, FAINT));
+            ui.label(widgets::text(tr("confiance", "confidence"), 11.0, FAINT));
             ui.label(widgets::text(format!("{:.0} %", route.confidence * 100.0), 11.5, TEXT).monospace());
             if route.risky() {
-                widgets::chip_icon(ui, Some(Icon::Shield), "revue sécurité", RED);
+                widgets::chip_icon(ui, Some(Icon::Shield), tr("revue sécurité", "security review"), RED);
             }
         });
         ui.add_space(10.0);
@@ -294,7 +329,7 @@ fn verdict(app: &App, ui: &mut Ui) {
             let left = &mut cols[0];
             stat(left, "Code", route.code, ACCENT_HI);
             left.add_space(6.0);
-            stat(left, "Risque", route.risk, RED);
+            stat(left, tr("Risque", "Risk"), route.risk, RED);
             left.add_space(6.0);
             stat(left, "Apps", route.apps, GREEN);
             let right = &mut cols[1];
@@ -302,7 +337,7 @@ fn verdict(app: &App, ui: &mut Ui) {
             right.add_space(6.0);
             stat(right, "Impact", route.blast, AMBER);
             right.add_space(6.0);
-            stat_count(right, "Outils", tools);
+            stat_count(right, tr("Outils", "Tools"), tools);
         });
         if route.playbook.is_some() || route.needs_web() || route.needs_apps() {
             ui.add_space(10.0);

@@ -10,7 +10,8 @@ use eframe::egui::{
 use uuid::Uuid;
 
 use super::{
-    App, fx,
+    App,
+    i18n::{english, tr}, fx,
     icons::{self, Icon},
     theme::{self, ACCENT, ACCENT_HI, CYAN, EDGE, EDGE_HI, FAINT, GREEN, INPUT, MUTED, RED, SOFT, TEXT, TILE_ACTIVE, TILE_HOVER},
     widgets,
@@ -23,7 +24,7 @@ const DELETE_CONFIRM: Duration = Duration::from_secs(3);
 
 pub fn show(app: &mut App, ui: &mut Ui) {
     ui.add_space(14.0);
-    if widgets::primary_icon(ui, Some(Icon::Plus), "Nouvelle discussion", ui.available_width()).on_hover_text("Ctrl+N").clicked()
+    if widgets::primary_icon(ui, Some(Icon::Plus), tr("Nouvelle discussion", "New chat"), ui.available_width()).on_hover_text("Ctrl+N").clicked()
     {
         app.new_chat();
     }
@@ -55,7 +56,7 @@ fn search(app: &mut App, ui: &mut Ui) {
         TextEdit::singleline(&mut app.search)
             .id(id)
             .frame(Frame::NONE)
-            .hint_text("Rechercher")
+            .hint_text(tr("Rechercher", "Search"))
             .align(Align2::LEFT_CENTER)
             .font(FontId::proportional(13.5))
             .desired_width(edit.width()),
@@ -63,7 +64,7 @@ fn search(app: &mut App, ui: &mut Ui) {
     if clear {
         let button = Rect::from_center_size(rect.right_center() - vec2(18.0, 0.0), vec2(24.0, 24.0));
         let mut child = ui.new_child(eframe::egui::UiBuilder::new().max_rect(button));
-        if widgets::icon_button_sized(&mut child, Icon::Close, 24.0, FAINT, false).on_hover_text("Effacer").clicked() {
+        if widgets::icon_button_sized(&mut child, Icon::Close, 24.0, FAINT, false).on_hover_text(tr("Effacer", "Clear")).clicked() {
             app.search.clear();
         }
     }
@@ -113,7 +114,7 @@ fn history(app: &mut App, ui: &mut Ui) {
             let (rect, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
             icons::paint(ui.painter(), rect, Icon::Bubble, FAINT);
             ui.add_space(6.0);
-            ui.label(widgets::text("Aucune discussion pour l'instant.", 12.5, FAINT));
+            ui.label(widgets::text(tr("Aucune discussion pour l'instant.", "No chats yet."), 12.5, FAINT));
         });
     }
     match action {
@@ -169,7 +170,7 @@ fn row(ui: &mut Ui, conv: &Conversation, selected: bool, running: bool, armed: b
     } else {
         fx::mix(SOFT, TEXT, k * 0.7)
     };
-    let title = if armed { "Re-cliquer pour supprimer" } else { conv.title.as_str() };
+    let title = if armed { tr("Re-cliquer pour supprimer", "Click again to delete") } else { conv.title.as_str() };
     let reserve = if hovered || running { 40.0 } else { 14.0 };
     let galley = widgets::line(ui, title, FontId::proportional(13.5), color, rect.width() - 14.0 - reserve);
     p.galley(rect.left_center() + vec2(14.0, -galley.size().y / 2.0), galley, color);
@@ -183,18 +184,18 @@ fn row(ui: &mut Ui, conv: &Conversation, selected: bool, running: bool, armed: b
     } else if running {
         widgets::status(p, del_rect.center(), CYAN, t);
     }
-    let del = del.on_hover_text("Supprimer définitivement (confirmer par un 2e clic)");
+    let del = del.on_hover_text(tr("Supprimer définitivement (confirmer par un 2e clic)", "Delete permanently (confirm with a 2nd click)"));
     let clicked = if del.clicked() { Some((conv.id, true)) } else { resp.clicked().then_some((conv.id, false)) };
     (clicked, rect)
 }
 
 fn bucket(today: NaiveDate, at: DateTime<Utc>) -> &'static str {
     match (today - at.with_timezone(&Local).date_naive()).num_days() {
-        ..=0 => "Aujourd'hui",
-        1 => "Hier",
-        2..=7 => "7 derniers jours",
-        8..=30 => "30 derniers jours",
-        _ => "Plus ancien",
+        ..=0 => tr("Aujourd'hui", "Today"),
+        1 => tr("Hier", "Yesterday"),
+        2..=7 => tr("7 derniers jours", "Last 7 days"),
+        8..=30 => tr("30 derniers jours", "Last 30 days"),
+        _ => tr("Plus ancien", "Older"),
     }
 }
 
@@ -203,28 +204,34 @@ fn footer(app: &mut App, ui: &mut Ui) {
     let (ok, label, place, detail) = match &app.vpn {
         Some(v) => {
             let place = [v.country.as_deref(), v.org.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-            let detail = format!(
-                "IP : {}\nTunnel : {}\nOpérateur : {}",
-                v.ip.as_deref().unwrap_or("non vérifiée"),
-                v.tunnel.as_deref().unwrap_or("aucun"),
-                v.org.as_deref().unwrap_or("?")
-            );
-            (v.active, if v.active { "VPN actif" } else { "Sans VPN" }, place, detail)
+            let ip = v.ip.as_deref().unwrap_or(tr("non vérifiée", "unchecked"));
+            let tunnel = v.tunnel.as_deref().unwrap_or(tr("aucun", "none"));
+            let org = v.org.as_deref().unwrap_or("?");
+            let detail = if english() {
+                format!("IP: {ip}\nTunnel: {tunnel}\nProvider: {org}")
+            } else {
+                format!("IP : {ip}\nTunnel : {tunnel}\nOpérateur : {org}")
+            };
+            (v.active, if v.active { tr("VPN actif", "VPN on") } else { tr("Sans VPN", "No VPN") }, place, detail)
         }
-        None => (false, "VPN", "détection…".to_owned(), String::new()),
+        None => (false, "VPN", tr("détection…", "detecting…").to_owned(), String::new()),
     };
     vpn_card(ui, ok, label, &place).on_hover_text(detail);
     ui.add_space(8.0);
     let workspace = app.env.workspace();
     let name = workspace.file_name().map_or_else(|| workspace.display().to_string(), |n| n.to_string_lossy().into_owned());
     if nav(ui, Icon::Folder, &name)
-        .on_hover_text(format!("Dossier de travail : {}\nCliquer pour changer", workspace.display()))
+        .on_hover_text(if english() {
+            format!("Workspace: {}\nClick to change", workspace.display())
+        } else {
+            format!("Dossier de travail : {}\nCliquer pour changer", workspace.display())
+        })
         .clicked()
     {
         app.pick_workspace();
     }
     ui.add_space(2.0);
-    if nav(ui, Icon::Gear, "Paramètres").clicked() {
+    if nav(ui, Icon::Gear, tr("Paramètres", "Settings")).clicked() {
         app.settings_draft = Some(app.settings.clone());
     }
     ui.add_space(12.0);

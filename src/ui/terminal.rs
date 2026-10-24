@@ -143,7 +143,7 @@ impl App {
         self.terminal.running = true;
         let (dir, emit) = (self.env.workspace(), self.emit.clone());
         self.spawn(async move {
-            let out = crate::tools::shell::execute(&dir, &cmd, TIMEOUT_SECS).await.unwrap_or_else(|e| format!("erreur : {e:#}"));
+            let out = crate::tools::shell::execute(&dir, &cmd, TIMEOUT_SECS).await.unwrap_or_else(|e| format!("{} : {e:#}", tr("erreur", "error")));
             emit.send(Event::Terminal(out));
         });
     }

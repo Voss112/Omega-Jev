@@ -106,9 +106,8 @@ Env: {} | shell: {} | workspace: {} | deps: {} | date: {}",
     if settings.autonomous {
         prompt.push_str(AUTONOMOUS);
     }
-    if settings.ui_lang == crate::domain::settings::UiLang::Fr {
-        prompt.push_str("\nWrite your reasoning (thinking) in French.");
-    }
+    // No instruction about the reasoning itself: Claude 5.x classifiers decline such prompts
+    // (`stop_reason: refusal`, category `reasoning_extraction`).
     if let Some((name, rules)) = project_rules(workspace) {
         let _ = write!(
             prompt,

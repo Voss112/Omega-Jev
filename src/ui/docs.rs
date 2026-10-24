@@ -4,6 +4,8 @@ use std::path::Path;
 
 use eframe::egui::Context;
 
+use super::i18n::tr;
+
 /// Files one prompt may carry.
 pub const MAX_DOCS: usize = 8;
 /// Bytes read per file: beyond, the prompt would eat the context window.
@@ -20,7 +22,7 @@ pub fn from_path(path: &Path) -> Result<Doc, String> {
     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
     let size = std::fs::metadata(path).map_err(|e| format!("{name} : {e}"))?.len();
     if size > MAX_BYTES {
-        return Err(format!("{name} : fichier trop lourd ({} Ko max)", MAX_BYTES / 1024));
+        return Err(format!("{name} : {} ({} Ko max)", tr("fichier trop lourd", "file too large"), MAX_BYTES / 1024));
     }
     let bytes = std::fs::read(path).map_err(|e| format!("{name} : {e}"))?;
     from_bytes(name, bytes)
@@ -28,9 +30,9 @@ pub fn from_path(path: &Path) -> Result<Doc, String> {
 
 fn from_bytes(name: String, bytes: Vec<u8>) -> Result<Doc, String> {
     if bytes.contains(&0) {
-        return Err(format!("{name} : fichier binaire non pris en charge (texte ou image uniquement)"));
+        return Err(format!("{name} : {}", tr("fichier binaire non pris en charge (texte ou image uniquement)", "binary file not supported (text or image only)")));
     }
-    let text = String::from_utf8(bytes).map_err(|_| format!("{name} : encodage non UTF-8"))?;
+    let text = String::from_utf8(bytes).map_err(|_| format!("{name} : {}", tr("encodage non UTF-8", "not UTF-8 encoded")))?;
     Ok(Doc { name, text })
 }
 

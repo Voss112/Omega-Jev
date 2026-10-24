@@ -137,7 +137,13 @@ impl Skill {
     }
 
     pub fn label(self) -> &'static str {
-        self.spec().label
+        let label = self.spec().label;
+        match label {
+            "Revue" => crate::ui::tr(label, "Review"),
+            "Audit sécurité" => crate::ui::tr(label, "Security audit"),
+            "Recherche" => crate::ui::tr(label, "Research"),
+            _ => label,
+        }
     }
 
     pub fn criteria(self) -> &'static str {

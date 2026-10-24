@@ -179,9 +179,9 @@ mod platform {
             if menu.is_null() {
                 return;
             }
-            AppendMenuW(menu, MF_STRING, OPEN, wide("Ouvrir Omega").as_ptr());
+            AppendMenuW(menu, MF_STRING, OPEN, wide(crate::ui::tr("Ouvrir Omega", "Open Omega")).as_ptr());
             AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-            AppendMenuW(menu, MF_STRING, QUIT, wide("Quitter").as_ptr());
+            AppendMenuW(menu, MF_STRING, QUIT, wide(crate::ui::tr("Quitter", "Quit")).as_ptr());
             let mut at = POINT { x: 0, y: 0 };
             GetCursorPos(&raw mut at);
             // Without it the menu would not close when clicking elsewhere.

@@ -268,7 +268,7 @@ pub fn tier_of(v: &Value) -> Option<(String, String)> {
     Some((tier, project_of(v)))
 }
 
-async fn post(http: &Client, access: &str, method: &str, body: &Value) -> Result<Value> {
+pub(crate) async fn post(http: &Client, access: &str, method: &str, body: &Value) -> Result<Value> {
     let res = http
         .post(format!("{CODE_ASSIST}:{method}"))
         .bearer_auth(access)

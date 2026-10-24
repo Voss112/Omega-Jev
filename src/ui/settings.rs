@@ -50,8 +50,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             if widgets::modal_header(
                 ui,
                 Icon::Gear,
-                "Paramètres",
-                "Connectez un abonnement ou saisissez une clé API. Tout le reste est réglé de façon optimale.",
+                tr("Paramètres", "Settings"),
+                tr(
+                    "Connectez un abonnement ou saisissez une clé API. Tout le reste est réglé de façon optimale.",
+                    "Connect a subscription or enter an API key. Everything else is tuned for you.",
+                ),
             ) {
                 action = Some(Action::Cancel);
             }
@@ -71,16 +74,16 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 icons::paint(ui.painter(), icon, Icon::Folder, FAINT);
                 ui.allocate_ui(vec2((ui.available_width() - 410.0).max(80.0), 30.0), |ui| {
                     widgets::truncated(ui, &paths::root().display().to_string(), FontId::proportional(11.5), FAINT)
-                        .on_hover_text("Données locales");
+                        .on_hover_text(tr("Données locales", "Local data"));
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if widgets::primary_icon(ui, Some(Icon::Check), "Enregistrer", 140.0).clicked() {
+                    if widgets::primary_icon(ui, Some(Icon::Check), tr("Enregistrer", "Save"), 140.0).clicked() {
                         action = Some(Action::Save);
                     }
-                    if widgets::ghost(ui, "Annuler").clicked() {
+                    if widgets::ghost(ui, tr("Annuler", "Cancel")).clicked() {
                         action = Some(Action::Cancel);
                     }
-                    if widgets::pill(ui, Some(Icon::Folder), "Ouvrir le dossier", MUTED, false).clicked() {
+                    if widgets::pill(ui, Some(Icon::Folder), tr("Ouvrir le dossier", "Open folder"), MUTED, false).clicked() {
                         let _ = open::that(paths::root());
                     }
                 });
@@ -89,13 +92,20 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if modal.should_close() && action.is_none() {
         action = Some(Action::Cancel);
     }
+    // The language previews as soon as it is picked; Cancel restores the saved one.
+    if let Some(draft) = &app.settings_draft {
+        super::i18n::set(draft.ui_lang);
+    }
     match action {
         Some(Action::Save) => {
             if let Some(s) = app.settings_draft.take() {
                 app.apply_settings(s);
             }
         }
-        Some(Action::Cancel) => app.settings_draft = None,
+        Some(Action::Cancel) => {
+            app.settings_draft = None;
+            super::i18n::set(app.settings.ui_lang);
+        }
         None => {}
     }
     if bench {
@@ -127,10 +137,13 @@ fn form(
     accounts: &HashMap<Provider, String>,
 ) -> Option<SubAction> {
     let mut sub = None;
-    widgets::form_section(ui, Icon::Star, "Abonnements");
+    widgets::form_section(ui, Icon::Star, tr("Abonnements", "Subscriptions"));
     ui.label(
         RichText::new(
-            "Connexion par abonnement : la page du fournisseur s'ouvre, vous validez sur le site, Omega reçoit le jeton.",
+            tr(
+                "Connexion par abonnement : la page du fournisseur s'ouvre, vous validez sur le site, Omega reçoit le jeton.",
+                "Subscription sign-in: the provider's page opens, you approve on the site, Omega receives the token.",
+            ),
         )
         .size(12.0)
         .color(MUTED),
@@ -143,20 +156,20 @@ fn form(
                 ui.label(RichText::new(provider.label()).font(super::theme::bold(14.0)).color(TEXT));
                 ui.horizontal(|ui| match accounts.get(&provider) {
                     Some(account) => {
-                        widgets::chip_icon(ui, Some(Icon::Check), format!("Connecté · {account}"), GREEN);
+                        widgets::chip_icon(ui, Some(Icon::Check), format!("{} · {account}", tr("Connecté", "Connected")), GREEN);
                     }
                     None => {
-                        widgets::chip(ui, "Non connecté", FAINT);
+                        widgets::chip(ui, tr("Non connecté", "Not connected"), FAINT);
                     }
                 });
                 ui.end_row();
                 ui.label("");
                 ui.horizontal_wrapped(|ui| {
-                    if widgets::pill(ui, Some(Icon::Globe), "Se connecter", SOFT, false).clicked() {
+                    if widgets::pill(ui, Some(Icon::Globe), tr("Se connecter", "Sign in"), SOFT, false).clicked() {
                         sub = Some(SubAction::Connect(provider));
                     }
                     if provider == Provider::Claude
-                        && widgets::pill(ui, Some(Icon::Download), "Importer la session Claude Code", SOFT, false).clicked()
+                        && widgets::pill(ui, Some(Icon::Download), tr("Importer la session Claude Code", "Import the Claude Code session"), SOFT, false).clicked()
                     {
                         sub = Some(SubAction::Import);
                     }
@@ -166,17 +179,17 @@ fn form(
                     ui.label(label("Antigravity"));
                     ui.horizontal_wrapped(|ui| match crate::infra::llm::agy::binary() {
                         Some(_) => {
-                            widgets::chip_icon(ui, Some(Icon::Check), "agy installé · abonnement Pro/Ultra (texte)", GREEN);
-                            if widgets::pill(ui, Some(Icon::Globe), "Se connecter à Antigravity", SOFT, false)
-                                .on_hover_text("Ouvre agy dans une console : connexion Google, puis /quit")
+                            widgets::chip_icon(ui, Some(Icon::Check), tr("agy installé · abonnement Pro/Ultra (texte)", "agy installed · Pro/Ultra plan (text)"), GREEN);
+                            if widgets::pill(ui, Some(Icon::Globe), tr("Se connecter à Antigravity", "Sign in to Antigravity"), SOFT, false)
+                                .on_hover_text(tr("Ouvre agy dans une console : connexion Google, puis /quit", "Opens agy in a console: Google sign-in, then /quit"))
                                 .clicked()
                             {
                                 sub = Some(SubAction::AgyLogin);
                             }
                         }
                         None => {
-                            if widgets::pill(ui, Some(Icon::Download), "Installer Antigravity (agy)", SOFT, false)
-                                .on_hover_text("Google réserve désormais les abonnements personnels à l'Antigravity CLI")
+                            if widgets::pill(ui, Some(Icon::Download), tr("Installer Antigravity (agy)", "Install Antigravity (agy)"), SOFT, false)
+                                .on_hover_text(tr("Google réserve désormais les abonnements personnels à l'Antigravity CLI", "Google now limits personal plans to the Antigravity CLI"))
                                 .clicked()
                             {
                                 sub = Some(SubAction::InstallAgy);
@@ -186,16 +199,16 @@ fn form(
                     ui.end_row();
                 }
                 if provider == Provider::Claude {
-                    ui.label(label("Jeton longue durée"));
+                    ui.label(label(tr("Jeton longue durée", "Long-lived token")));
                     ui.horizontal(|ui| {
                         ui.add(
                             TextEdit::singleline(token)
-                                .hint_text("sk-ant-oat… (claude setup-token) — évite l'échange OAuth limité")
+                                .hint_text(tr("sk-ant-oat… (claude setup-token) — évite l'échange OAuth limité", "sk-ant-oat… (claude setup-token) — avoids the rate-limited OAuth exchange"))
                                 .password(true)
                                 .margin(Margin::symmetric(10, 6))
                                 .desired_width(FIELD - 90.0),
                         );
-                        if widgets::pill(ui, None, "Utiliser", SOFT, false).clicked() && !token.trim().is_empty() {
+                        if widgets::pill(ui, None, tr("Utiliser", "Use"), SOFT, false).clicked() && !token.trim().is_empty() {
                             sub = Some(SubAction::UseToken);
                         }
                     });
@@ -207,8 +220,8 @@ fn form(
                     _ => s.claude_auth,
                 };
                 let text = |m: AuthMode| match m {
-                    AuthMode::Subscription => "Abonnement",
-                    AuthMode::ApiKey => "Clé API",
+                    AuthMode::Subscription => tr("Abonnement", "Subscription"),
+                    AuthMode::ApiKey => tr("Clé API", "API key"),
                 };
                 widgets::dropdown(
                     ui,
@@ -232,18 +245,22 @@ fn form(
         });
     }
     sub = github_section(ui, s, github, accounts.get(&Provider::GitHub)).or(sub);
-    widgets::form_section(ui, Icon::Key, "Clés API");
+    widgets::form_section(ui, Icon::Key, tr("Clés API", "API keys"));
     card_grid(ui, "keys", |ui| {
         secret(ui, "DeepSeek", &mut s.deepseek_key, "sk-…  (platform.deepseek.com)");
-        secret(ui, "Claude (API)", &mut s.claude_key, "sk-ant-… (platform.claude.com) — inutile en abonnement");
-        secret(ui, "Gemini (API)", &mut s.gemini_key, "AIza… (aistudio.google.com) — inutile en abonnement");
-        secret(ui, "Jev (TypeSafe)", &mut s.jev_key, "console.typesafe.ai — requis pour le routage Jev");
+        secret(ui, "Claude (API)", &mut s.claude_key, tr("sk-ant-… (platform.claude.com) — inutile en abonnement", "sk-ant-… (platform.claude.com) — not needed with a subscription"));
+        secret(ui, "Gemini (API)", &mut s.gemini_key, tr("AIza… (aistudio.google.com) — inutile en abonnement", "AIza… (aistudio.google.com) — not needed with a subscription"));
+        secret(ui, "Jev (TypeSafe)", &mut s.jev_key, tr("console.typesafe.ai — requis pour le routage Jev", "console.typesafe.ai — required for Jev routing"));
     });
-    widgets::form_section(ui, Icon::Cube, "Modèles");
+    widgets::form_section(ui, Icon::Cube, tr("Modèles", "Models"));
     ui.label(
         RichText::new(
-            "Le modèle se choisit aussi dans la zone de saisie : liste réelle du compte (⟳) et identifiant libre. \
-             Ces champs restent la valeur de repli, modifiable à la main.",
+            tr(
+                "Le modèle se choisit aussi dans la zone de saisie : liste réelle du compte (⟳) et identifiant libre. \
+                 Ces champs restent la valeur de repli, modifiable à la main.",
+                "The model can also be picked in the input box: the account's real list (⟳) or any id. \
+                 These fields stay the fallback, editable by hand.",
+            ),
         )
         .size(11.5)
         .color(MUTED),
@@ -251,18 +268,18 @@ fn form(
     ui.add_space(6.0);
     card_grid(ui, "models", |ui| {
         text(ui, "URL DeepSeek", &mut s.deepseek_url, "");
-        text(ui, "Modèle DeepSeek", &mut s.deepseek_model, "deepseek-flash = V4.1 Flash 1017");
-        text(ui, "URL Claude", &mut s.claude_url, "https://api.anthropic.com (ignorée en abonnement)");
-        text(ui, "Modèle Claude", &mut s.claude_model, "claude-sonnet-4-5");
-        text(ui, "URL Gemini", &mut s.gemini_url, "endpoint OpenAI-compatible des clés API (ignorée en abonnement)");
-        text(ui, "Modèle Gemini", &mut s.gemini_model, "gemini-3.8-pro");
-        text(ui, "Gemini Flash", &mut s.gemini_flash_model, "gemini-3.8-flash — reçoit le travail délégué");
+        text(ui, tr("Modèle DeepSeek", "DeepSeek model"), &mut s.deepseek_model, "deepseek-flash = V4.1 Flash 1017");
+        text(ui, "URL Claude", &mut s.claude_url, tr("https://api.anthropic.com (ignorée en abonnement)", "https://api.anthropic.com (ignored with a subscription)"));
+        text(ui, tr("Modèle Claude", "Claude model"), &mut s.claude_model, "claude-sonnet-4-5");
+        text(ui, "URL Gemini", &mut s.gemini_url, tr("endpoint OpenAI-compatible des clés API (ignorée en abonnement)", "OpenAI-compatible endpoint for API keys (ignored with a subscription)"));
+        text(ui, tr("Modèle Gemini", "Gemini model"), &mut s.gemini_model, "gemini-3.8-pro");
+        text(ui, "Gemini Flash", &mut s.gemini_flash_model, tr("gemini-3.8-flash — reçoit le travail délégué", "gemini-3.8-flash — receives delegated work"));
         text(ui, "URL Jev", &mut s.jev_url, "");
-        text(ui, "Modèle Jev", &mut s.jev_model, "jev-latest ou version épinglée");
+        text(ui, tr("Modèle Jev", "Jev model"), &mut s.jev_model, tr("jev-latest ou version épinglée", "jev-latest or a pinned version"));
     });
-    widgets::form_section(ui, Icon::Sparkle, "Comportement");
+    widgets::form_section(ui, Icon::Sparkle, tr("Comportement", "Behavior"));
     card_grid(ui, "behavior", |ui| {
-        ui.label(label("Style de sortie"));
+        ui.label(label(tr("Style de sortie", "Output style")));
         widgets::dropdown(ui, None, s.style.label(), 240.0, |ui| {
             for style in Style::ALL {
                 if widgets::menu_item(ui, s.style == style, style.label()).clicked() {
@@ -271,10 +288,11 @@ fn form(
             }
         });
         ui.end_row();
-        ui.label(label("Langue de dictée"));
-        let current = DICTATION_LANGUAGES.iter().find(|(code, _)| *code == s.dictation_language).map_or("Français", |(_, l)| l);
+        ui.label(label(tr("Langue de dictée", "Dictation language")));
+        let current = DICTATION_LANGUAGES.iter().find(|(code, _)| *code == s.dictation_language).map_or("Français", |(code, l)| if *code == "auto" { tr(l, "Automatic detection") } else { l });
         widgets::dropdown(ui, None, current, 240.0, |ui| {
             for (code, name) in DICTATION_LANGUAGES {
+                let name = if code == "auto" { tr(name, "Automatic detection") } else { name };
                 if widgets::menu_item(ui, s.dictation_language == code, name).clicked() {
                     s.dictation_language = code.into();
                 }
@@ -345,15 +363,15 @@ fn form(
             let current = s
                 .workspace
                 .as_ref()
-                .map_or_else(|| format!("{} (défaut)", paths::workspace().display()), |p| p.display().to_string());
+                .map_or_else(|| format!("{} ({})", paths::workspace().display(), tr("défaut", "default")), |p| p.display().to_string());
             ui.allocate_ui(vec2((ui.available_width() - 190.0).max(80.0), 30.0), |ui| {
                 widgets::truncated(ui, &current, FontId::proportional(12.5), SOFT);
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if widgets::pill(ui, None, "Défaut", MUTED, false).clicked() {
+                if widgets::pill(ui, None, tr("Défaut", "Default"), MUTED, false).clicked() {
                     s.workspace = None;
                 }
-                if widgets::pill(ui, Some(Icon::Folder), "Choisir…", SOFT, false).clicked()
+                if widgets::pill(ui, Some(Icon::Folder), tr("Choisir…", "Choose…"), SOFT, false).clicked()
                     && let Some(dir) = rfd::FileDialog::new().pick_folder()
                 {
                     s.workspace = Some(dir);
@@ -372,38 +390,43 @@ fn github_section(ui: &mut Ui, s: &mut Settings, token: &mut String, account: Op
         ui.label(RichText::new("GitHub").font(super::theme::bold(14.0)).color(TEXT));
         ui.horizontal(|ui| match account {
             Some(login) => {
-                widgets::chip_icon(ui, Some(Icon::Check), format!("Connecté · {login}"), GREEN);
+                widgets::chip_icon(ui, Some(Icon::Check), format!("{} · {login}", tr("Connecté", "Connected")), GREEN);
             }
             None => {
-                widgets::chip(ui, "Non connecté", FAINT);
+                widgets::chip(ui, tr("Non connecté", "Not connected"), FAINT);
             }
         });
         ui.end_row();
         ui.label("");
         ui.horizontal_wrapped(|ui| {
-            if widgets::pill(ui, Some(Icon::Globe), "Se connecter à GitHub", SOFT, false).clicked() {
+            if widgets::pill(ui, Some(Icon::Globe), tr("Se connecter à GitHub", "Sign in to GitHub"), SOFT, false).clicked() {
                 sub = Some(SubAction::Connect(Provider::GitHub));
             }
-            if account.is_some() && widgets::pill(ui, Some(Icon::Close), "Se déconnecter", MUTED, false).clicked() {
+            if account.is_some() && widgets::pill(ui, Some(Icon::Close), tr("Se déconnecter", "Sign out"), MUTED, false).clicked() {
                 sub = Some(SubAction::Disconnect(Provider::GitHub));
             }
         });
         ui.end_row();
-        ui.label(label("Jeton"));
+        ui.label(label(tr("Jeton", "Token")));
         ui.horizontal(|ui| {
             ui.add(
                 TextEdit::singleline(token)
-                    .hint_text("ghp_… ou github_pat_… (au lieu de la connexion)")
+                    .hint_text(tr("ghp_… ou github_pat_… (au lieu de la connexion)", "ghp_… or github_pat_… (instead of signing in)"))
                     .password(true)
                     .margin(Margin::symmetric(10, 6))
                     .desired_width(FIELD - 90.0),
             );
-            if widgets::pill(ui, None, "Utiliser", SOFT, false).clicked() && !token.trim().is_empty() {
+            if widgets::pill(ui, None, tr("Utiliser", "Use"), SOFT, false).clicked() && !token.trim().is_empty() {
                 sub = Some(SubAction::GitHubToken);
             }
         });
         ui.end_row();
-        switch(ui, "Shell de l'agent", &mut s.github_shell, "git push / gh authentifiés avec ce compte (jeton jamais écrit sur disque)");
+        switch(
+            ui,
+            tr("Shell de l'agent", "Agent shell"),
+            &mut s.github_shell,
+            tr("git push / gh authentifiés avec ce compte (jeton jamais écrit sur disque)", "git push / gh signed in with this account (token never written to disk)"),
+        );
     });
     sub
 }
@@ -448,7 +471,7 @@ fn secret(ui: &mut Ui, name: &str, value: &mut String, hint: &str) {
                 .desired_width(FIELD - 36.0),
         );
         let icon = if shown { Icon::EyeOff } else { Icon::Eye };
-        if widgets::icon_button(ui, icon, if shown { "Masquer" } else { "Afficher" }).clicked() {
+        if widgets::icon_button(ui, icon, if shown { tr("Masquer", "Hide") } else { tr("Afficher", "Show") }).clicked() {
             shown = !shown;
         }
     });

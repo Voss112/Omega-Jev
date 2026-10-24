@@ -23,20 +23,39 @@ pub fn zoom_for(logical: Vec2) -> f32 {
 #[derive(Default)]
 pub struct Scaler {
     monitor: Option<Vec2>,
+    /// Frames left before the monitor size can be trusted again after a zoom change.
+    settling: u8,
 }
+
+/// `monitor_size` is converted to points with the pixels-per-point of the frame that gathered the input: right
+/// after a zoom change it still uses the old zoom, and reading it then would bounce the zoom back and forth.
+const SETTLE_FRAMES: u8 = 3;
 
 impl Scaler {
     pub fn update(&mut self, ctx: &Context) {
-        let (monitor, outer) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().outer_rect));
+        if self.settling > 0 {
+            self.settling -= 1;
+            ctx.request_repaint();
+            return;
+        }
+        let (monitor, outer, ppp) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().outer_rect, i.pixels_per_point));
         let Some(monitor) = monitor else { return };
+        // Mid-change (input gathered at another pixels-per-point than this frame's): try again next frame.
+        if (ppp - ctx.pixels_per_point()).abs() > 1e-3 {
+            ctx.request_repaint();
+            return;
+        }
         let logical = monitor * ctx.zoom_factor();
-        if self.monitor.is_some_and(|m| (m - logical).length() < 1.0) {
+        if self.monitor.is_some_and(|m| (m - logical).length() < 2.0) {
             return;
         }
         let first = self.monitor.is_none();
         self.monitor = Some(logical);
         let zoom = zoom_for(logical);
-        ctx.set_zoom_factor(zoom);
+        if (zoom - ctx.zoom_factor()).abs() > 1e-3 {
+            ctx.set_zoom_factor(zoom);
+            self.settling = SETTLE_FRAMES;
+        }
         // Default size larger than a small screen: open maximized instead of off-screen.
         let too_big =
             outer.is_some_and(|r| r.width() * ctx.zoom_factor() > logical.x || r.height() * ctx.zoom_factor() > logical.y);

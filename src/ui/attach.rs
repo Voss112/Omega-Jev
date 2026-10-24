@@ -9,6 +9,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use eframe::egui::{ColorImage, Context, Event, Key, TextureHandle, TextureOptions, Ui, vec2};
 use image::{DynamicImage, ImageFormat};
 
+use super::i18n::tr;
 use crate::domain::chat::{Conversation, Image};
 
 /// Beyond this the payload explodes and providers reject the request.
@@ -24,7 +25,7 @@ const MAX_ALLOC: u64 = 256 << 20;
 pub fn from_path(path: &Path) -> Result<Image, String> {
     let size = std::fs::metadata(path).map_err(|e| format!("{} : {e}", path.display()))?.len();
     if size > MAX_INPUT {
-        return Err(format!("{} : image trop lourde (25 Mo max)", path.display()));
+        return Err(format!("{} : {}", path.display(), tr("image trop lourde (25 Mo max)", "image too large (25 MB max)")));
     }
     let bytes = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
     from_bytes(&bytes)
@@ -39,13 +40,13 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Image, String> {
 fn decode(bytes: &[u8]) -> Result<DynamicImage, String> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(|e| format!("image illisible : {e}"))?;
+        .map_err(|e| format!("{} : {e}", tr("image illisible", "unreadable image")))?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_SIDE_INPUT);
     limits.max_image_height = Some(MAX_SIDE_INPUT);
     limits.max_alloc = Some(MAX_ALLOC);
     reader.limits(limits);
-    reader.decode().map_err(|e| format!("image illisible : {e}"))
+    reader.decode().map_err(|e| format!("{} : {e}", tr("image illisible", "unreadable image")))
 }
 
 /// Images pasted with Ctrl+V this frame.
@@ -70,7 +71,7 @@ pub fn pasted(ctx: &Context) -> Vec<Result<Image, String>> {
 fn from_color(img: &ColorImage) -> Result<Image, String> {
     let [w, h] = img.size;
     let rgba = img.pixels.iter().flat_map(|p| p.to_srgba_unmultiplied()).collect();
-    let buf = image::RgbaImage::from_raw(w as u32, h as u32, rgba).ok_or("image du presse-papiers invalide")?;
+    let buf = image::RgbaImage::from_raw(w as u32, h as u32, rgba).ok_or(tr("image du presse-papiers invalide", "invalid clipboard image"))?;
     encode(downscale(DynamicImage::ImageRgba8(buf)))
 }
 
@@ -98,7 +99,7 @@ fn encode(img: DynamicImage) -> Result<Image, String> {
             .write_to(&mut cursor, ImageFormat::Jpeg)
             .map_err(|e| format!("encodage JPEG : {e}"))?;
         if buf.len() > MAX_BYTES {
-            return Err("image trop lourde même après compression".into());
+            return Err(tr("image trop lourde même après compression", "image still too large after compression").into());
         }
         return Ok(Image::new("image/jpeg", STANDARD.encode(&buf)));
     }
@@ -114,7 +115,7 @@ pub fn dropped(ctx: &Context) -> Vec<Result<Vec<u8>, String>> {
             .map(|f| {
                 let path = f.path();
                 match std::fs::metadata(path) {
-                    Ok(m) if m.len() > MAX_INPUT => Err(format!("{} : image trop lourde (25 Mo max)", path.display())),
+                    Ok(m) if m.len() > MAX_INPUT => Err(format!("{} : {}", path.display(), tr("image trop lourde (25 Mo max)", "image too large (25 MB max)"))),
                     Ok(_) => f.bytes().map_err(|e| format!("{} : {e}", path.display())),
                     Err(e) => Err(format!("{} : {e}", path.display())),
                 }
@@ -185,7 +186,7 @@ pub fn thumb(
         );
         if removable {
             let button = eframe::egui::Rect::from_center_size(resp.rect.right_top() + vec2(-11.0, 11.0), vec2(20.0, 20.0));
-            let click = ui.interact(button, resp.id.with("remove"), eframe::egui::Sense::click()).on_hover_text("Retirer");
+            let click = ui.interact(button, resp.id.with("remove"), eframe::egui::Sense::click()).on_hover_text(tr("Retirer", "Remove"));
             let p = ui.painter();
             p.circle_filled(
                 button.center(),
@@ -196,7 +197,7 @@ pub fn thumb(
             remove = click.clicked();
         }
     } else {
-        ui.label(eframe::egui::RichText::new("image illisible").size(10.5).color(super::theme::RED));
+        ui.label(eframe::egui::RichText::new(tr("image illisible", "unreadable image")).size(10.5).color(super::theme::RED));
     }
     remove
 }

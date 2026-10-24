@@ -25,7 +25,7 @@ impl Style {
     pub fn label(self) -> &'static str {
         match self {
             Self::Normal => "Normal",
-            Self::Concise => "Concis",
+            Self::Concise => crate::ui::tr("Concis", "Concise"),
             Self::Caveman => "Caveman",
             Self::Ultra => "Ultra-caveman",
         }

@@ -49,14 +49,11 @@ impl Style {
 
 /// Flat user-facing configuration (one toggle per option is intended).
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// Active System Two engine (switchable from the composer).
     pub engine: Engine,
-    pub kimi_key: String,
-    pub kimi_url: String,
-    pub kimi_model: String,
     pub deepseek_key: String,
     pub deepseek_url: String,
     pub deepseek_model: String,
@@ -67,10 +64,6 @@ pub struct Settings {
     pub claude_url: String,
     pub claude_model: String,
     pub claude_auth: AuthMode,
-    pub gemini_key: String,
-    pub gemini_url: String,
-    pub gemini_model: String,
-    pub gemini_auth: AuthMode,
     /// Effort chosen per engine (never by the router).
     pub effort: Efforts,
     pub style: Style,
@@ -94,9 +87,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             engine: Engine::default(),
-            kimi_key: String::new(),
-            kimi_url: "https://api.moonshot.ai/v1".into(),
-            kimi_model: "kimi-k3.1-pro".into(),
             deepseek_key: String::new(),
             deepseek_url: "https://api.deepseek.com".into(),
             deepseek_model: "deepseek-flash".into(),
@@ -107,10 +97,6 @@ impl Default for Settings {
             claude_url: "https://api.anthropic.com".into(),
             claude_model: "claude-sonnet-4-5".into(),
             claude_auth: AuthMode::Subscription,
-            gemini_key: String::new(),
-            gemini_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
-            gemini_model: "gemini-2.5-pro".into(),
-            gemini_auth: AuthMode::Subscription,
             effort: Efforts::default(),
             style: Style::default(),
             max_steps: 64,
@@ -121,7 +107,8 @@ impl Default for Settings {
             compact_at: 100_000,
             proxy: String::new(),
             require_vpn: false,
-            ip_lookup: true,
+            // Off by default: no third party learns the exit IP unless the user opts in.
+            ip_lookup: false,
             workspace: None,
         }
     }
@@ -130,20 +117,36 @@ impl Default for Settings {
 impl Settings {
     /// (url, key, model) configured for `engine`.
     pub fn endpoint(&self, engine: Engine) -> (&str, &str, &str) {
+        let model = self.model(engine);
         match engine {
-            Engine::Kimi => (&self.kimi_url, &self.kimi_key, &self.kimi_model),
-            Engine::DeepSeek => (&self.deepseek_url, &self.deepseek_key, &self.deepseek_model),
-            Engine::Claude => (&self.claude_url, &self.claude_key, &self.claude_model),
-            Engine::Gemini => (&self.gemini_url, &self.gemini_key, &self.gemini_model),
+            Engine::DeepSeek => (&self.deepseek_url, &self.deepseek_key, model),
+            Engine::Claude => (&self.claude_url, &self.claude_key, model),
         }
     }
 
-    /// Auth mode of `engine` (API keys are the only option for Kimi/DeepSeek).
+    /// Model id sent to `engine` (the picker's source of truth).
+    pub fn model(&self, engine: Engine) -> &str {
+        match engine {
+            Engine::DeepSeek => &self.deepseek_model,
+            Engine::Claude => &self.claude_model,
+        }
+    }
+
+    /// Keeps one model per engine, so switching provider never loses the choice.
+    pub fn set_model(&mut self, engine: Engine, id: &str) {
+        let slot = match engine {
+            Engine::DeepSeek => &mut self.deepseek_model,
+            Engine::Claude => &mut self.claude_model,
+        };
+        slot.clear();
+        slot.push_str(id.trim());
+    }
+
+    /// Auth mode of `engine` (API keys are the only option for DeepSeek).
     pub fn auth_mode(&self, engine: Engine) -> AuthMode {
         match engine {
-            Engine::Kimi | Engine::DeepSeek => AuthMode::ApiKey,
+            Engine::DeepSeek => AuthMode::ApiKey,
             Engine::Claude => self.claude_auth,
-            Engine::Gemini => self.gemini_auth,
         }
     }
 }
@@ -164,7 +167,6 @@ max_steps = 24
         let s: Settings = toml::from_str(old).expect("rétrocompatible");
         assert_eq!(s.engine, Engine::DeepSeek);
         assert_eq!(s.claude_auth, AuthMode::Subscription, "les abonnements sont le défaut");
-        assert_eq!(s.gemini_model, "gemini-2.5-pro");
         assert_eq!(s.effort.get(Engine::DeepSeek), Engine::DeepSeek.default_effort());
         assert_eq!(s.claude_url, "https://api.anthropic.com");
         let hand_edited: Settings = toml::from_str("engine = \"deepseek\"\n").expect("alias toléré");
@@ -172,10 +174,30 @@ max_steps = 24
     }
 
     #[test]
+    fn retired_engines_fall_back_to_their_closest_successor() {
+        let kimi: Settings =
+            toml::from_str("engine = \"kimi\"\nkimi_key = \"x\"\n[effort]\nkimi = \"high\"\n").expect("kimi retiré");
+        assert_eq!(kimi.engine, Engine::DeepSeek);
+        let gemini: Settings = toml::from_str("engine = \"gemini\"\ngemini_auth = \"api_key\"\n").expect("gemini retiré");
+        assert_eq!(gemini.engine, Engine::Claude);
+    }
+
+    #[test]
     fn endpoint_and_auth_mode_follow_the_engine() {
         let s = Settings::default();
         assert_eq!(s.endpoint(Engine::Claude).0, "https://api.anthropic.com");
-        assert_eq!(s.auth_mode(Engine::Kimi), AuthMode::ApiKey);
-        assert_eq!(s.auth_mode(Engine::Gemini), AuthMode::Subscription);
+        assert_eq!(s.auth_mode(Engine::DeepSeek), AuthMode::ApiKey);
+        assert_eq!(s.auth_mode(Engine::Claude), AuthMode::Subscription);
+    }
+
+    #[test]
+    fn each_engine_keeps_its_own_model() {
+        let mut s = Settings::default();
+        s.set_model(Engine::Claude, " claude-opus-5-5 ");
+        assert_eq!(s.claude_model, "claude-opus-5-5");
+        assert_eq!(s.endpoint(Engine::Claude).2, "claude-opus-5-5");
+        assert_eq!(s.model(Engine::DeepSeek), "deepseek-flash", "les autres moteurs ne bougent pas");
+        let back: Settings = toml::from_str(&toml::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.model(Engine::Claude), "claude-opus-5-5");
     }
 }

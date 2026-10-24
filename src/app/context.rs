@@ -1,24 +1,22 @@
 //! Request assembly in immutable order: [static system] → [history] → [current turn + <ctx>].
-//! Everything before the current turn is byte-identical to the previous request → KV-cache hits.
+//! Append-only: everything before the current turn is byte-identical to the previous request → KV-cache hits,
+//! and Claude's signed reasoning stays valid. Only compaction (a summary) rewrites the history, once.
 
 use std::{fmt::Write as _, path::Path};
 
 use serde_json::{Value, json};
 
-use super::{Env, prompts};
+use super::Env;
 use crate::{
     domain::{
         chat::{Conversation, Message, Role},
+        engine::{Engine, Wire},
         playbook::Playbook,
         route::Route,
         skill::Skill,
     },
-    tools::{compress::clip, fs, schema},
+    tools::{fs, schema},
 };
-
-/// Tool outputs older than this many user turns are compacted.
-const KEEP_TURNS: usize = 3;
-const COMPACT_CHARS: usize = 600;
 
 /// `loaded`: playbook ids already present earlier in the history (not re-sent).
 pub fn preamble(route: &Route, root: &Path, first_turn: bool, loaded: &[&str]) -> String {
@@ -56,26 +54,46 @@ pub fn preamble(route: &Route, root: &Path, first_turn: bool, loaded: &[&str]) -
     p
 }
 
-pub fn request(conv: &Conversation, env: &Env) -> Value {
-    let cutoff = compaction_cutoff(conv);
-    let vision = env.settings.engine.vision();
-    let mut messages = vec![json!({ "role": "system", "content": prompts::system(&env.settings, &env.workspace()) })];
+/// What the active provider reads beyond the OpenAI-shaped core.
+#[derive(Clone, Copy, Default)]
+struct Target {
+    vision: bool,
+    /// Claude: signed reasoning and block layout (`false` = resend without the reasoning blocks).
+    parts: bool,
+    /// DeepSeek: `reasoning_content` of earlier answers.
+    reasoning: bool,
+}
+
+/// `system` is built once per turn (`prompts::system`): a prompt that changes mid-turn (date, rules file)
+/// would void Claude's signed reasoning and the prompt cache. `replay = false` drops Claude's reasoning blocks.
+pub fn request(conv: &Conversation, env: &Env, system: &str, replay: bool) -> Value {
+    let target = Target {
+        vision: env.llm.engine.vision(),
+        parts: replay && env.llm.wire() == Wire::Anthropic,
+        reasoning: env.llm.engine == Engine::DeepSeek,
+    };
+    let mut messages = vec![json!({ "role": "system", "content": system })];
     let from = conv.summary.as_ref().map_or(0, |s| {
         messages.push(json!({ "role": "system", "content": format!("Summary of the earlier conversation:
 {}", s.text) }));
         s.upto
     });
-    messages.extend(conv.messages.iter().enumerate().skip(from).map(|(i, m)| wire(m, i < cutoff, vision)));
+    messages.extend(conv.messages.iter().enumerate().skip(from).map(|(i, m)| {
+        // Reasoning signed against an older prefix (other tools, system or history) is dropped as a leading run.
+        let target = Target { parts: target.parts && i >= conv.thinking_from, ..target };
+        wire(m, target)
+    }));
     let tools = (!conv.toolset.is_empty()).then(|| schema::schemas(&conv.toolset));
     env.llm.body(&messages, tools)
 }
 
-fn wire(m: &Message, compact: bool, vision: bool) -> Value {
+fn wire(m: &Message, target: Target) -> Value {
     match m.role {
         Role::User => {
-            let text = if m.preamble.is_empty() { m.content.clone() } else { format!("<ctx>\n{}\n</ctx>\n{}", m.preamble, m.content) };
-            if vision && !m.images.is_empty() {
-                // Claude/Gemini reject empty text blocks: an image-only turn sends images alone.
+            let text =
+                if m.preamble.is_empty() { m.content.clone() } else { format!("<ctx>\n{}\n</ctx>\n{}", m.preamble, m.content) };
+            if target.vision && !m.images.is_empty() {
+                // Claude rejects empty text blocks: an image-only turn sends images alone.
                 let mut parts = Vec::new();
                 if !text.is_empty() {
                     parts.push(json!({ "type": "text", "text": text }));
@@ -92,7 +110,7 @@ fn wire(m: &Message, compact: bool, vision: bool) -> Value {
         }
         Role::Assistant => {
             let mut v = json!({ "role": "assistant", "content": m.content });
-            if !m.reasoning.is_empty() {
+            if target.reasoning && !m.reasoning.is_empty() {
                 v["reasoning_content"] = json!(m.reasoning);
             }
             if !m.tool_calls.is_empty() {
@@ -102,18 +120,15 @@ fn wire(m: &Message, compact: bool, vision: bool) -> Value {
                     .map(|c| json!({ "id": c.id, "type": "function", "function": { "name": c.name, "arguments": c.arguments } }))
                     .collect();
             }
+            if target.parts && !m.parts.is_empty() {
+                v["parts"] = serde_json::to_value(&m.parts).unwrap_or_default();
+            }
             v
         }
         Role::Tool => {
-            let content = if compact { clip(&m.content, COMPACT_CHARS) } else { m.content.clone() };
-            json!({ "role": "tool", "tool_call_id": m.tool_call_id, "content": content })
+            json!({ "role": "tool", "tool_call_id": m.tool_call_id, "content": m.content })
         }
     }
-}
-
-/// Index of the KEEP_TURNS-th last user message; tool outputs before it are compacted.
-fn compaction_cutoff(conv: &Conversation) -> usize {
-    conv.messages.iter().enumerate().filter(|(_, m)| m.role == Role::User).map(|(i, _)| i).rev().nth(KEEP_TURNS - 1).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -157,7 +172,7 @@ mod tests {
     #[test]
     fn an_image_only_turn_sends_no_empty_text_block() {
         let m = Message::user_with(String::new(), vec![screenshot()]);
-        let w = wire(&m, false, true);
+        let w = wire(&m, Target { vision: true, ..Target::default() });
         let parts = w["content"].as_array().unwrap();
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0]["type"], "image_url");
@@ -166,7 +181,59 @@ mod tests {
     #[test]
     fn a_text_engine_gets_a_placeholder_for_an_image_only_turn() {
         let m = Message::user_with(String::new(), vec![screenshot()]);
-        let w = wire(&m, false, false);
+        let w = wire(&m, Target::default());
         assert_eq!(w["content"], "[image]");
+    }
+
+    #[test]
+    fn a_claude_tool_loop_replays_its_signed_reasoning() {
+        use crate::domain::{
+            auth::AuthMode,
+            chat::{Part, ToolCall},
+            settings::Settings,
+        };
+        let settings = Settings {
+            engine: Engine::Claude,
+            claude_auth: AuthMode::ApiKey,
+            claude_key: "k".into(),
+            claude_model: "claude-opus-5-5".into(),
+            ..Settings::default()
+        };
+        let web = std::sync::Arc::new(crate::tools::webindex::WebIndex::open(&std::env::temp_dir().join("omega-ctx-web")));
+        let env = Env::new(settings, web).unwrap();
+        let mut conv = Conversation::default();
+        conv.push(Message::user("cherche".into()));
+        let call = ToolCall { id: "toolu_1".into(), name: "grep".into(), arguments: "{}".into() };
+        let parts = vec![Part::Thinking { thinking: String::new(), signature: "sig".into() }, Part::ToolUse { call: 0 }];
+        conv.push(Message { parts, ..Message::assistant(String::new(), String::new(), vec![call]) });
+        conv.push(Message::tool("toolu_1".into(), "1 hit".into()));
+        let body = request(&conv, &env, "SYS", true);
+        assert_eq!(body["messages"][1]["content"][0], json!({ "type": "thinking", "thinking": "", "signature": "sig" }));
+        assert_eq!(body["messages"][2]["content"][0]["type"], "tool_result");
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        let stripped = request(&conv, &env, "SYS", false);
+        assert_eq!(stripped["messages"][1]["content"][0]["type"], "tool_use", "repli sans les blocs de pensée");
+    }
+
+    #[test]
+    fn provider_specific_fields_only_reach_the_provider_that_reads_them() {
+        use crate::domain::chat::{Part, ToolCall};
+        let call = ToolCall { id: "c1".into(), name: "grep".into(), arguments: "{}".into() };
+        let m = Message {
+            parts: vec![Part::Thinking { thinking: String::new(), signature: "s".into() }, Part::ToolUse { call: 0 }],
+            ..Message::assistant("ok".into(), "pensée".into(), vec![call])
+        };
+        let plain = wire(&m, Target::default());
+        assert!(plain.get("parts").is_none() && plain.get("reasoning_content").is_none());
+        let all = wire(&m, Target { parts: true, reasoning: true, ..Target::default() });
+        assert_eq!(all["parts"][0]["type"], "thinking");
+        assert_eq!(all["reasoning_content"], "pensée");
+    }
+
+    #[test]
+    fn a_conversation_saved_with_gemini_signatures_still_loads() {
+        let call: crate::domain::chat::ToolCall =
+            serde_json::from_str(r#"{"id":"c1","name":"grep","arguments":"{}","signature":"sig"}"#).expect("champ retiré toléré");
+        assert_eq!(call.name, "grep");
     }
 }

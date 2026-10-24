@@ -24,7 +24,11 @@ fn compile(defs: &[(&str, &'static str)]) -> Vec<(Regex, &'static str)> {
 
 static BLOCKED: Rules = LazyLock::new(|| {
     compile(&[
-        (r"(?i)\brm\s+(-\S+\s+)*-\S*r\S*\s+(-\S+\s+)*(/|~|\*|/\*|\$HOME|[a-z]:\\?)(\s|$)", "suppression récursive racine/home"),
+        // The target may close a quoted or nested command: `awk 'BEGIN{system("rm -rf ~")}'`.
+        (
+            r#"(?i)\brm\s+(-\S+\s+)*-\S*r\S*\s+(-\S+\s+)*(/|~|\*|/\*|\$HOME|[a-z]:\\?)(\s|$|["'`);|&])"#,
+            "suppression récursive racine/home",
+        ),
         (r"(?i)\b(mkfs|fdisk|diskpart|format-volume|clear-disk)\b|\bformat\s+[a-z]:", "formatage disque"),
         (r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", "fork bomb"),
         (r"(?i)\bdd\s+.*\bof=/dev/", "écriture disque brute"),
@@ -35,15 +39,35 @@ static BLOCKED: Rules = LazyLock::new(|| {
         (r"(?i)\b(shutdown|reboot|halt|poweroff|stop-computer|restart-computer)\b", "arrêt système"),
         (r"(?i)\breg(\.exe)?\s+delete\s+hk|remove-item\s+.*hk(lm|cu):", "suppression registre"),
         (r"(?i)remove-item\b.*-recurse.*\s([a-z]:\\?|\$env:\w+|~)\s*$", "suppression récursive système"),
-        (r"(?i)(moonshot_api_key|deepseek_api_key|typesafe_api_key|omega[\\/]settings\.toml)", "accès aux clés API"),
+        (
+            r"(?i)(moonshot_api_key|deepseek_api_key|typesafe_api_key|anthropic_api_key|gemini_api_key|google_api_key|omega[\\/]settings\.toml)",
+            "accès aux clés API",
+        ),
         (r"(?i)\b(nc|ncat|netcat)\b.*\s-e\s", "reverse shell"),
     ])
 });
 
 static RISKY: Rules = LazyLock::new(|| {
     compile(&[
-        (r"(?i)(^|[\s;&|(])(rm|del|erase|rmdir|rd|remove-item|ri|unlink)\s", "suppression de fichiers"),
-        (r"(?i)\bgit\s+(push|reset\s+--hard|clean|checkout\s+--|rebase|filter-branch|branch\s+-D)", "git destructif ou distant"),
+        (r#"(?i)(^|[\s;&|({"'`])(rm|del|erase|rmdir|rd|remove-item|ri|unlink|clear-content|clc)\s"#, "suppression de fichiers"),
+        (
+            r"(?i)\bgit\s+(push|reset\s+--hard|clean|checkout\s+(--|-f\b|\.)|restore\b|switch\s+(-f\b|--discard-changes)|stash\s+(drop|clear)|rebase|filter-branch|branch\s+-D)",
+            "git destructif ou distant",
+        ),
+        // Wrappers that run whatever they are given: packages fetched on the fly, find actions, git aliases and hooks.
+        (
+            r"(?i)(^|[\s;&|(])(npx|pnpx|bunx)(\.cmd)?\s|\b(pnpm|yarn|bun)\s+(dlx|x)\s|\bdeno\s+(run|install)\b[^|;&\n]*https?://|\bgo\s+(run|install)\s+[^\s|;&]*@",
+            "exécution d'un paquet téléchargé",
+        ),
+        (r"(?i)\bfind\b[^|;&\n]*\s-(delete|exec|execdir|ok|okdir)\b", "find avec action (-delete/-exec)"),
+        (
+            r"(?i)\bsystem\s*\(|\bgit\b[^|;&\n]*\s(-c\s|--config-env\b)|\.git[\\/](hooks|config)\b|\bgit\s+config\b[^|;&\n]*\b(alias\.|core\.(hookspath|fsmonitor|sshcommand|pager|editor|askpass|gitproxy))",
+            "exécution indirecte (system(), configuration ou hooks git)",
+        ),
+        (
+            r"(?i)\[(system\.)?io\.(file|directory)\]::|\.(delete|moveto|copyto|replace|writealltext|writeallbytes|writealllines|appendalltext|appendalllines|setaccesscontrol)\s*\(",
+            "API .NET d'écriture ou de suppression de fichiers",
+        ),
         (r"(?i)\b(sudo|su|runas|doas|chmod|chown|icacls|takeown|set-executionpolicy)\b", "élévation ou permissions"),
         (
             r"(?i)\b(npm|cargo|twine|gem)\s+publish\b|\bdocker\s+(push|rm|rmi|system\s+prune)",
@@ -151,7 +175,6 @@ const SAFE_PROGRAMS: &[&str] = &[
     "copy-item",
     "date",
     "get-date",
-    "env",
     "printenv",
     "uname",
     "whoami",
@@ -170,6 +193,9 @@ const SAFE_PROGRAMS: &[&str] = &[
     "select-object",
     "where-object",
     "foreach-object",
+    "foreach",
+    "%",
+    "?",
     "set-location",
     "get-command",
 ];
@@ -182,18 +208,28 @@ pub fn assess(cmd: &str) -> Verdict {
         return Verdict::Risky(why);
     }
     // Stream merges (`2>&1`) are not command separators.
-    let merged = cmd.replace("2>&1", "").replace("1>&2", "");
-    let segments = merged.split(['|', ';', '&', '\n']).map(str::trim).filter(|s| !s.is_empty());
-    if segments.into_iter().all(|seg| program(seg).is_some_and(|p| SAFE_PROGRAMS.contains(&p.as_str()))) {
-        Verdict::Safe
-    } else {
-        Verdict::Unknown
+    let mut merged = cmd.replace("2>&1", "").replace("1>&2", "");
+    if !cfg!(windows) {
+        // sh command substitution; in PowerShell the backtick is only an escape character.
+        merged = merged.replace('`', "\n");
     }
+    // Script blocks (`{ … }`) and sub-expressions (`(…)`, `$(…)`) run commands of their own: each is checked.
+    let segments = merged.split(['|', ';', '&', '\n', '{', '}', '(']).map(str::trim).filter(|s| !s.is_empty());
+    if segments.into_iter().all(safe_segment) { Verdict::Safe } else { Verdict::Unknown }
+}
+
+fn safe_segment(segment: &str) -> bool {
+    // `$_.Length -gt 5` inside Where-/ForEach-Object reads a property; a call (`(`) is a separate segment.
+    let lower = segment.to_lowercase();
+    if lower.starts_with("$_") || lower.starts_with("$psitem") {
+        return true;
+    }
+    program(segment).is_some_and(|p| SAFE_PROGRAMS.contains(&p.as_str()))
 }
 
 fn program(segment: &str) -> Option<String> {
     let token = segment.split_whitespace().find(|t| !t.contains('='))?;
-    let token = token.trim_matches(['"', '\'', '(', '{', '.']);
+    let token = token.split(')').next().unwrap_or(token).trim_matches(['"', '\'', '(', '{', '.']);
     let name = token.rsplit(['/', '\\']).next().unwrap_or(token).to_lowercase();
     Some(name.trim_end_matches(".exe").to_owned())
 }
@@ -235,11 +271,19 @@ pub fn resolve_read(root: &Path, rel: &str) -> Result<PathBuf> {
 }
 
 /// Like `resolve`, and refuses VCS internals (a `.git/hooks` write is code execution on the next git call).
+/// Windows reaches `.git` as `.GIT`, `.git.` or its 8.3 alias (`GIT~1`) too: the resolved path is checked as well.
 pub fn resolve_writable(root: &Path, rel: &str) -> Result<PathBuf> {
     let target = resolve(root, rel)?;
-    let inside_git = target.strip_prefix(normalize(root)).is_ok_and(|p| p.components().any(|c| c.as_os_str() == ".git"));
-    ensure!(!inside_git, "writing inside .git is not allowed: {rel}");
+    let base = normalize(root);
+    let in_git = |path: &Path, base: &Path| path.strip_prefix(base).is_ok_and(|p| p.components().any(|c| is_git(c.as_os_str())));
+    let resolved = target.ancestors().find(|p| p.exists()).and_then(|p| p.canonicalize().ok());
+    let resolved_in_git = resolved.zip(base.canonicalize().ok()).is_some_and(|(t, b)| in_git(&t, &b));
+    ensure!(!in_git(&target, &base) && !resolved_in_git, "writing inside .git is not allowed: {rel}");
     Ok(target)
+}
+
+fn is_git(name: &std::ffi::OsStr) -> bool {
+    name.to_string_lossy().trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".git")
 }
 
 fn normalize(path: &Path) -> PathBuf {
@@ -267,5 +311,52 @@ pub fn self_test() -> Result<String> {
     ensure!(resolve_writable(&tmp, ".git/hooks/pre-commit").is_err(), "écriture .git autorisée");
     ensure!(matches!(assess("Set-Content a.rs -Value x"), Verdict::Risky(_)), "écriture shell non détectée");
     ensure!(matches!(assess("cargo test 2>&1"), Verdict::Safe), "redirection 2>&1 mal classée");
+    ensure!(matches!(assess(r#"awk 'BEGIN{system("rm -rf ~")}'"#), Verdict::Blocked(_)), "rm imbriqué non bloqué");
+    ensure!(matches!(assess("npx left-pad"), Verdict::Risky(_)), "npx non détecté");
+    ensure!(!matches!(assess("env bash run.sh"), Verdict::Safe), "env lance n'importe quoi");
+    ensure!(!matches!(assess(r"gci | % { .\evil.exe }"), Verdict::Safe), "bloc de script non inspecté");
+    ensure!(!matches!(assess("Write-Output (calc)"), Verdict::Safe), "sous-expression non inspectée");
+    ensure!(matches!(assess("gci | Where-Object { $_.Length -gt 5 }"), Verdict::Safe), "filtre PowerShell refusé");
+    ensure!(resolve_writable(&tmp, ".GIT/hooks/pre-commit").is_err(), "écriture .GIT autorisée");
     Ok(format!("{} règles bloquantes, {} à risque", BLOCKED.len(), RISKY.len()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrappers_and_destructive_variants_are_not_auto_approved() {
+        for cmd in [
+            "find . -name '*.rs' -delete",
+            "git -c core.pager=calc log",
+            "cp x .git/hooks/pre-commit",
+            "git restore .",
+            "git checkout -- src",
+            "[IO.File]::Delete('a.rs')",
+            "gci | % { $_.Delete() }",
+            "pnpm dlx cowsay",
+            "go run example.com/tool@latest",
+            "Clear-Content a.rs",
+        ] {
+            assert!(matches!(assess(cmd), Verdict::Risky(_)), "{cmd}");
+        }
+        for cmd in ["$git = 'calc'; & $git", "cargo test; & ./run.exe", "echo $(./evil)"] {
+            assert!(!matches!(assess(cmd), Verdict::Safe), "{cmd}");
+        }
+        for cmd in ["cargo build --release", "git status", "Get-ChildItem -Recurse | Select-Object -First 5", "rg foo src"] {
+            assert!(matches!(assess(cmd), Verdict::Safe), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn git_internals_are_refused_under_any_spelling() {
+        let root = std::env::temp_dir().join("omega-guard-git");
+        std::fs::create_dir_all(root.join(".git").join("hooks")).unwrap();
+        for rel in [".git/hooks/pre-commit", ".GIT/config", ".git./hooks/x"] {
+            assert!(resolve_writable(&root, rel).is_err(), "{rel}");
+        }
+        assert!(resolve_writable(&root, "src/.gitignore").is_ok());
+        assert!(resolve_writable(&root, ".github/workflows/ci.yml").is_ok());
+    }
 }

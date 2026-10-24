@@ -1,20 +1,39 @@
 //! User intents: send, stop, regenerate, edit, undo files, export, settings, background tasks.
 
-use std::{fmt::Write as _, time::Duration};
+use std::{fmt::Write as _, sync::Arc, time::Duration};
 
 use uuid::Uuid;
 
 use super::{App, Live, attach, build_env};
 use crate::{
-    app::{Event, agent, health, prompts},
+    app::{Env, Event, agent, health, prompts},
     domain::{
         auth::{AuthMode, Cred, Provider},
         chat::{Conversation, Message, Role},
+        engine::{Efforts, Engine},
+        schedule::Job,
         settings::Settings,
     },
     infra::{store, vpn},
     tools::checkpoint::Checkpoint,
 };
+
+/// The settings the self-tests depend on: credentials, endpoints, models, proxy, workspace, output style.
+fn probed(s: &Settings) -> Settings {
+    Settings {
+        engine: Engine::default(),
+        effort: Efforts::default(),
+        max_steps: 0,
+        auto_approve: false,
+        bypass: false,
+        confirm_edits: false,
+        auto_diagnostics: false,
+        compact_at: 0,
+        require_vpn: false,
+        ip_lookup: false,
+        ..s.clone()
+    }
+}
 
 impl App {
     pub(super) fn new_chat(&mut self) {
@@ -52,7 +71,7 @@ impl App {
         let images = std::mem::take(&mut self.shots);
         if !images.is_empty() && !self.settings.engine.vision() {
             self.notify(format!(
-                "{} ne lit pas les images : elles restent locales (utilisez Claude ou Gemini pour les montrer).",
+                "{} ne lit pas les images : elles restent locales (utilisez Claude pour les montrer).",
                 self.settings.engine.label()
             ));
         }
@@ -92,12 +111,18 @@ impl App {
     }
 
     fn launch(&mut self, id: Uuid) {
+        self.launch_with(id, self.env.clone());
+    }
+
+    /// Runs the conversation's last turn with `env` (the user's, or a scheduled job's own).
+    fn launch_with(&mut self, id: Uuid, env: Arc<Env>) {
         let Some(snapshot) = self.conv(id).cloned() else { return };
         self.errors.remove(&id);
         self.save(id);
         self.convs.sort_by_key(|c| std::cmp::Reverse(c.updated));
-        let handle = self.spawn(agent::run(snapshot, self.env.clone(), self.emit.clone()));
-        self.live.insert(id, Live { handle: Some(handle), ..Live::default() });
+        let (engine, model) = (env.llm.engine, env.llm.model.clone());
+        let handle = self.spawn(agent::run(snapshot, env, self.emit.clone()));
+        self.live.insert(id, Live { handle: Some(handle), engine, model, ..Live::default() });
     }
 
     /// Loads a user message into the composer; sending replaces it and everything after.
@@ -164,7 +189,7 @@ impl App {
         self.approvals.retain(|a| a.conv != id);
         if let Some(conv) = self.conv_mut(id) {
             if !live.text.is_empty() || !live.reasoning.is_empty() {
-                conv.push(Message::assistant(live.text, live.reasoning, Vec::new()));
+                conv.push(Message::assistant(live.text, live.reasoning, Vec::new()).by(live.engine, &live.model));
             }
             conv.repair();
             let turn = conv.messages.iter().rev().find(|m| m.role == Role::User).map(Message::turn_key);
@@ -182,36 +207,30 @@ impl App {
             self.notify(format!("Paramètres non enregistrés : {e:#}"));
         }
         let (env, notice) = build_env(&settings, &self.web);
+        // Engine, effort or bypass switches do not re-run the network self-tests (token refreshes, paid probes).
+        let probes = probed(&self.settings) != probed(&settings);
+        let vpn = (&self.settings.proxy, self.settings.ip_lookup) != (&settings.proxy, settings.ip_lookup);
         self.settings = settings;
         self.env = env;
         if let Some(n) = notice {
             self.notify(n);
         }
-        self.restart_background();
+        if probes {
+            self.refresh_health();
+        }
+        if vpn {
+            self.restart_vpn();
+        }
     }
 
     /// Opens the provider page and starts the OAuth dance.
     pub(super) fn connect(&mut self, provider: Provider) {
         self.settings_draft = None;
-        let started = match provider {
-            Provider::Claude => Ok(crate::app::login::claude_start()),
-            Provider::Gemini => crate::app::login::gemini_start(),
+        let (url, login) = match provider {
+            Provider::Claude => crate::app::login::claude_start(),
         };
-        match started {
-            Ok((url, login)) => {
-                let _ = open::that(&url);
-                if provider == Provider::Gemini {
-                    let (env, emit, task_login) = (self.env.clone(), self.emit.clone(), login.clone());
-                    let task = self.spawn(async move {
-                        let result = crate::app::login::await_gemini(&env.http, &task_login).await;
-                        emit.send(Event::Connected { provider, result: result.map_err(|e| format!("{e:#}")) });
-                    });
-                    self.login_task = Some(task);
-                }
-                self.login = Some(login);
-            }
-            Err(e) => self.notify(format!("Connexion {} impossible : {e:#}", provider.label())),
-        }
+        let _ = open::that(&url);
+        self.login = Some(login);
     }
 
     /// Exchanges the code the user pasted from the provider page.
@@ -231,9 +250,6 @@ impl App {
     }
 
     pub(super) fn cancel_login(&mut self) {
-        if let Some(task) = self.login_task.take() {
-            task.abort();
-        }
         self.login = None;
     }
 
@@ -258,16 +274,21 @@ impl App {
                     self.notify(format!("Jetons non enregistrés : {e:#}"));
                     return;
                 }
+                let subscribe = |s: &mut Settings| {
+                    match provider {
+                        Provider::Claude => s.claude_auth = AuthMode::Subscription,
+                    }
+                    s.engine = provider.engine();
+                };
                 let mut settings = self.settings.clone();
-                match provider {
-                    Provider::Claude => settings.claude_auth = AuthMode::Subscription,
-                    Provider::Gemini => settings.gemini_auth = AuthMode::Subscription,
+                subscribe(&mut settings);
+                // An open settings form must not put the old mode back when it is saved.
+                if let Some(draft) = &mut self.settings_draft {
+                    subscribe(draft);
                 }
-                settings.engine = provider.engine();
                 self.apply_settings(settings);
-                if let Some(task) = self.login_task.take() {
-                    task.abort();
-                }
+                self.reload_accounts();
+                self.refresh_models(provider.engine());
                 self.login = None;
                 let account = if cred.account.is_empty() { provider.label().to_owned() } else { cred.account.clone() };
                 self.notify(format!("{} connecté · {account}", provider.label()));
@@ -329,6 +350,27 @@ impl App {
         self.spawn(async move { emit.send(Event::Health(health::check(&env).await)) });
     }
 
+    /// Live token-economy benchmark on the saved settings (real provider calls).
+    pub(super) fn run_bench(&mut self) {
+        self.bench_running = true;
+        let (env, emit) = (self.env.clone(), self.emit.clone());
+        self.spawn(async move { emit.send(Event::Bench(crate::app::bench::run(&env).await)) });
+    }
+
+    /// Asks the provider which model ids this credential may call; the picker merges them with the catalogue.
+    pub(super) fn refresh_models(&mut self, engine: Engine) {
+        let (env, emit) = (self.env.clone(), self.emit.clone());
+        self.spawn(async move {
+            let llm = crate::infra::llm::Llm::new(env.http.clone(), &env.settings, engine);
+            let result = if llm.configured() {
+                llm.catalog().await.map_err(|e| format!("{e:#}"))
+            } else {
+                Err("aucun identifiant connecté".to_owned())
+            };
+            emit.send(Event::Models { engine, result });
+        });
+    }
+
     /// Adds a screenshot to the composer, with a hard cap.
     pub(super) fn attach(&mut self, img: crate::domain::chat::Image) {
         if self.shots.len() >= attach::MAX_IMAGES {
@@ -343,21 +385,25 @@ impl App {
         if self.settings_draft.is_some() || self.login.is_some() || self.schedule_draft.is_some() {
             return;
         }
-        for bytes in attach::dropped(ctx) {
-            match bytes.and_then(|b| attach::from_bytes(&b)) {
+        let dropped = attach::dropped(ctx).into_iter().map(|b| b.and_then(|b| attach::from_bytes(&b)));
+        for img in dropped.chain(attach::pasted(ctx)) {
+            match img {
                 Ok(img) => self.attach(img),
                 Err(e) => self.notify(e),
             }
         }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(eframe::egui::Key::V))
-            && let Some(img) = attach::from_clipboard()
-        {
-            self.attach(img);
-        }
     }
 
-    pub(super) fn restart_background(&mut self) {
-        self.refresh_health();
+    /// Connected account of each subscription, for the settings form.
+    pub(super) fn reload_accounts(&mut self) {
+        self.accounts = Provider::ALL
+            .into_iter()
+            .filter_map(|p| Some((p, crate::infra::auth::Auth::load(p)?.account())))
+            .filter(|(_, account)| !account.is_empty())
+            .collect();
+    }
+
+    pub(super) fn restart_vpn(&mut self) {
         if let Some(task) = self.vpn_task.take() {
             task.abort();
         }
@@ -373,10 +419,12 @@ impl App {
     /// Opens the scheduler with the current draft as the default prompt.
     pub(super) fn open_schedule(&mut self) {
         let prompt = std::mem::take(&mut self.draft);
+        let engine = self.settings.engine;
         self.schedule_draft = Some(super::schedule::Draft::new(
             prompt,
-            self.settings.engine,
-            self.settings.effort.get(self.settings.engine),
+            engine,
+            self.settings.model(engine).to_owned(),
+            self.settings.effort.get(engine),
         ));
         self.schedule_error = None;
     }
@@ -389,8 +437,12 @@ impl App {
 
     /// Fires every job whose instant has passed. Each one starts its own conversation, in bypass.
     pub(super) fn fire_due_jobs(&mut self) {
+        // Kill-switch on: wait for the first VPN detection instead of discarding what is due at startup.
+        if self.settings.require_vpn && self.vpn.is_none() {
+            return;
+        }
         let now = chrono::Utc::now();
-        let due: Vec<crate::domain::schedule::Job> = self.jobs.iter().filter(|j| j.due(now)).cloned().collect();
+        let due: Vec<Job> = self.jobs.iter().filter(|j| j.due(now)).cloned().collect();
         if due.is_empty() {
             return;
         }
@@ -406,24 +458,32 @@ impl App {
         });
         self.persist_jobs();
         for job in due {
-            let mut settings = self.settings.clone();
-            settings.engine = job.engine;
-            settings.effort.set(job.engine, job.effort);
-            // A scheduled run never waits for a human: bypass is part of the contract.
-            settings.bypass = true;
-            self.apply_settings(settings);
-            self.new_chat();
-            self.notify("Tâche programmée lancée (bypass)");
-            self.send_text(job.prompt);
+            self.run_job(job);
         }
     }
-}
 
-impl App {
-    /// Same path as `send`, minus the composer.
-    pub(super) fn send_text(&mut self, text: String) {
-        self.draft = text;
-        self.send();
+    /// A job runs with its own engine, model and effort, in bypass, through an environment of its own:
+    /// the user's settings, draft, images and open conversation are left untouched.
+    fn run_job(&mut self, job: Job) {
+        if self.settings.require_vpn && !self.vpn.as_ref().is_some_and(|v| v.active) {
+            self.notify("Kill-switch VPN : tâche programmée non lancée (aucun VPN détecté).");
+            return;
+        }
+        let mut settings = self.settings.clone();
+        settings.engine = job.engine;
+        if !job.model.trim().is_empty() {
+            settings.set_model(job.engine, &job.model);
+        }
+        settings.effort.set(job.engine, job.effort);
+        // A scheduled run never waits for a human: bypass is part of the contract.
+        settings.bypass = true;
+        let (env, _) = build_env(&settings, &self.web);
+        let mut conv = Conversation::default();
+        let id = conv.id;
+        conv.push(Message::user(job.prompt));
+        self.convs.insert(0, conv);
+        self.launch_with(id, env);
+        self.notify("Tâche programmée lancée (bypass)");
     }
 }
 

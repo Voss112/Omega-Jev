@@ -10,34 +10,30 @@ pub enum AuthMode {
 }
 
 /// Providers that accept a consumer subscription through OAuth.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     Claude,
-    Gemini,
 }
 
 impl Provider {
-    pub const ALL: [Provider; 2] = [Self::Claude, Self::Gemini];
+    pub const ALL: [Provider; 1] = [Self::Claude];
 
     pub fn id(self) -> &'static str {
         match self {
             Self::Claude => "claude",
-            Self::Gemini => "gemini",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Claude => "Claude",
-            Self::Gemini => "Gemini",
         }
     }
 
     pub fn engine(self) -> crate::domain::engine::Engine {
         match self {
             Self::Claude => crate::domain::engine::Engine::Claude,
-            Self::Gemini => crate::domain::engine::Engine::Gemini,
         }
     }
 }
@@ -52,8 +48,6 @@ pub struct Cred {
     pub expires_at: i64,
     /// Account label shown in the UI (email, plan or tier).
     pub account: String,
-    /// Gemini Code Assist project id (empty for Claude).
-    pub project: String,
 }
 
 /// Tokens never reach a log, a panic message or a debug print.
@@ -64,7 +58,6 @@ impl std::fmt::Debug for Cred {
             .field("refresh", &"<scellé>")
             .field("expires_at", &self.expires_at)
             .field("account", &self.account)
-            .field("project", &self.project)
             .finish()
     }
 }
@@ -92,8 +85,8 @@ mod tests {
 
     #[test]
     fn subscription_providers_map_to_their_engine() {
+        assert_eq!(Provider::ALL, [Provider::Claude]);
         assert_eq!(Provider::Claude.engine(), crate::domain::engine::Engine::Claude);
-        assert_eq!(Provider::Gemini.engine(), crate::domain::engine::Engine::Gemini);
-        assert_eq!((Provider::Claude.id(), Provider::Gemini.id()), ("claude", "gemini"));
+        assert_eq!(Provider::Claude.id(), "claude");
     }
 }

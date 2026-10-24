@@ -8,21 +8,25 @@ use std::{
 };
 
 use eframe::egui::{
-    Align, CornerRadius, Frame, Label, Layout, Margin, RichText, ScrollArea, Stroke, TextWrapMode, Ui,
+    Align, Color32, CornerRadius, FontId, Frame, Label, Layout, Margin, Rect, Response, RichText, ScrollArea, Sense, Stroke,
+    StrokeKind, TextWrapMode, Ui, pos2, vec2,
 };
 
 use super::{
-    App,
-    theme::{ACCENT, BORDER, CARD, CODE_BG, FAINT, MUTED, RAISED, RED, SOFT, TEXT, AMBER},
+    App, fx,
+    icons::{self, Icon},
+    theme::{
+        self, ACCENT, ACCENT_HI, AMBER, CODE_BG, CYAN, EDGE, EDGE_HI, FAINT, GREEN, MUTED, PINK, RED, SOFT, TEXT, TILE_ACTIVE,
+        TILE_HOVER,
+    },
     widgets,
 };
 
 /// A file bigger than this is shown truncated: the viewer is a reader, not an editor.
 const MAX_READ: u64 = 512 * 1024;
 const MAX_ENTRIES: usize = 400;
-const SKIP: &[&str] = &[
-    ".git", "target", "node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".idea", ".vscode", ".next", "coverage",
-];
+const SKIP: &[&str] =
+    &[".git", "target", "node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".idea", ".vscode", ".next", "coverage"];
 
 #[derive(Default)]
 pub struct Files {
@@ -48,9 +52,16 @@ pub struct OpenFile {
 }
 
 impl Files {
-    /// Drops cached directory listings: the agent may have just written files.
+    /// Drops cached directory listings and re-reads the open tabs: the agent may have just written files.
     pub fn invalidate(&mut self) {
         self.cache.clear();
+        for file in &mut self.open {
+            if let Ok((text, truncated)) = read_text(&file.path) {
+                file.numbered = number(&text);
+                file.text = text;
+                file.truncated = truncated;
+            }
+        }
     }
 
     fn entries(&mut self, dir: &Path) -> &[Entry] {
@@ -87,21 +98,23 @@ impl Files {
 
 /// Left panel: workspace tree, dirs first, hidden folders skipped.
 pub fn panel(app: &mut App, ui: &mut Ui) {
-    ui.add_space(14.0);
+    ui.add_space(16.0);
     let root = app.env.workspace();
     app.files.root = Some(root.clone());
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Fichiers").font(super::theme::bold(15.0)).color(TEXT));
+        ui.set_height(30.0);
+        ui.label(RichText::new("Fichiers").font(theme::bold(16.5)).color(TEXT));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::ghost(ui, "⟳").on_hover_text("Relire le dossier").clicked() {
+            if widgets::icon_button(ui, Icon::Refresh, "Relire le dossier").clicked() {
                 app.files.invalidate();
             }
         });
     });
-    ui.add_space(2.0);
-    ui.label(RichText::new(short(&root, &root).replace('\\', " › ")).size(10.5).color(FAINT)).on_hover_text(root.display().to_string());
-    ui.add_space(6.0);
+    let name = root.file_name().map_or_else(|| root.display().to_string(), |n| n.to_string_lossy().into_owned());
+    widgets::truncated(ui, &name, FontId::proportional(11.0), FAINT).on_hover_text(root.display().to_string());
+    ui.add_space(8.0);
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
         tree(app, ui, root.clone(), 0);
         if let Some(e) = &app.files.error {
             ui.add_space(6.0);
@@ -123,41 +136,56 @@ fn tree(app: &mut App, ui: &mut Ui, dir: PathBuf, depth: usize) {
             (e.name.clone(), e.dir)
         };
         let path = dir.join(&name);
-        let indent = depth as f32 * 12.0;
+        let indent = depth as f32 * 14.0;
         if is_dir {
             let expanded = app.files.expanded.contains(&path);
-            ui.horizontal(|ui| {
-                ui.add_space(indent);
-                let arrow = if expanded { "▾" } else { "▸" };
-                let resp = ui.add(
-                    eframe::egui::Button::new(RichText::new(format!("{arrow} 📁 {name}")).size(12.5).color(MUTED)).frame(false),
-                );
-                if resp.clicked() {
-                    if expanded {
-                        app.files.expanded.remove(&path);
-                    } else {
-                        app.files.expanded.insert(path.clone());
-                    }
+            if entry(ui, indent, &name, Some(expanded), false).clicked() {
+                if expanded {
+                    app.files.expanded.remove(&path);
+                } else {
+                    app.files.expanded.insert(path.clone());
                 }
-            });
+            }
             if app.files.expanded.contains(&path) {
                 tree(app, ui, path, depth + 1);
             }
         } else {
             let selected = app.files.active.and_then(|a| app.files.open.get(a)).is_some_and(|f| f.path == path);
-            ui.horizontal(|ui| {
-                ui.add_space(indent);
-                let color = if selected { ACCENT } else { SOFT };
-                let resp = ui.add(
-                    eframe::egui::Button::new(RichText::new(format!("{} {}", icon(&name), name)).size(12.5).color(color))
-                        .frame(false),
-                );
-                if resp.clicked() {
-                    app.files.open_file(&path, &root);
-                }
-            });
+            if entry(ui, indent, &name, None, selected).clicked() {
+                app.files.open_file(&path, &root);
+            }
         }
     }
+}
+
+/// One tree row; `expanded` is `Some` for directories.
+fn entry(ui: &mut Ui, indent: f32, name: &str, expanded: Option<bool>, selected: bool) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+    let k = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.1);
+    let turn = ui.ctx().animate_bool_with_time(resp.id.with("open"), expanded == Some(true), 0.15);
+    let p = ui.painter();
+    if selected {
+        p.rect(rect, 7.0, ACCENT.gamma_multiply(0.16), Stroke::new(1.0, ACCENT.gamma_multiply(0.35)), StrokeKind::Inside);
+    } else if k > 0.0 {
+        p.rect_filled(rect, 7.0, TILE_HOVER.gamma_multiply(k));
+    }
+    let mut x = rect.left() + 6.0 + indent;
+    let cy = rect.center().y;
+    if expanded.is_some() {
+        icons::chevron(p, pos2(x + 5.0, cy), 12.0, turn, fx::mix(FAINT, TEXT, k));
+    }
+    x += 14.0;
+    let (icon, color) = match expanded {
+        Some(_) => (Icon::Folder, AMBER.gamma_multiply(0.85)),
+        None => kind(name),
+    };
+    icons::at(p, pos2(x + 7.0, cy), 14.0, icon, color);
+    x += 20.0;
+    let base = if expanded.is_some() { MUTED } else { SOFT };
+    let fg = if selected { TEXT } else { fx::mix(base, TEXT, k) };
+    let galley = widgets::line(ui, name, FontId::proportional(12.5), fg, rect.right() - x - 6.0);
+    ui.painter().galley(pos2(x, cy - galley.size().y / 2.0), galley, fg);
+    resp
 }
 
 /// Tab strip above the conversation; returns `true` when a file is displayed.
@@ -165,36 +193,24 @@ pub fn tabs(app: &mut App, ui: &mut Ui) -> bool {
     if app.files.open.is_empty() {
         return false;
     }
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     let mut close = None;
     let mut select = None;
-    ScrollArea::horizontal().id_salt("file-tabs").max_height(30.0).show(ui, |ui| {
+    ScrollArea::horizontal().id_salt("file-tabs").max_height(34.0).show(ui, |ui| {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
             for (i, file) in app.files.open.iter().enumerate() {
                 let active = app.files.active == Some(i);
-                let name = file.path.file_name().map_or_else(|| file.path.display().to_string(), |n| n.to_string_lossy().into_owned());
-                let color = if active { TEXT } else { MUTED };
-                let frame = Frame::new()
-                    .fill(if active { RAISED } else { CARD })
-                    .stroke(Stroke::new(1.0, if active { ACCENT.gamma_multiply(0.6) } else { BORDER }))
-                    .corner_radius(CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 })
-                    .inner_margin(Margin { left: 10, right: 4, top: 4, bottom: 4 });
-                frame.show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if ui.add(eframe::egui::Button::new(RichText::new(name).size(12.0).color(color)).frame(false)).clicked() {
-                            select = Some(i);
-                        }
-                        if ui
-                            .add(eframe::egui::Button::new(RichText::new("✕").size(11.0).color(FAINT)).frame(false))
-                            .on_hover_text("Fermer l'onglet")
-                            .clicked()
-                        {
-                            close = Some(i);
-                        }
-                    });
-                });
+                let name =
+                    file.path.file_name().map_or_else(|| file.path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                match tab(ui, &name, active) {
+                    Some(true) => close = Some(i),
+                    Some(false) => select = Some(i),
+                    None => {}
+                }
             }
-            if ui.add(eframe::egui::Button::new(RichText::new("⌫ Tout fermer").size(11.0).color(FAINT)).frame(false)).clicked() {
+            ui.add_space(4.0);
+            if widgets::pill(ui, Some(Icon::Close), "Tout fermer", FAINT, false).clicked() {
                 close = Some(usize::MAX);
             }
         });
@@ -208,11 +224,35 @@ pub fn tabs(app: &mut App, ui: &mut Ui) -> bool {
         (None, Some(i)) => app.files.active = Some(i),
         (None, None) => {}
     }
-    ui.add_space(2.0);
     let rect = ui.max_rect();
-    ui.painter().hline(rect.x_range(), ui.cursor().top(), Stroke::new(1.0, BORDER));
-    ui.add_space(6.0);
+    fx::hairline(ui.painter(), rect.left(), rect.right(), ui.cursor().top() + 2.0, EDGE_HI);
+    ui.add_space(10.0);
     app.files.active.is_some()
+}
+
+/// One file tab; `Some(true)` = close clicked, `Some(false)` = tab clicked.
+fn tab(ui: &mut Ui, name: &str, active: bool) -> Option<bool> {
+    let (icon, color) = kind(name);
+    let galley = widgets::line(ui, name, FontId::proportional(12.5), if active { TEXT } else { MUTED }, 200.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 62.0, 32.0), Sense::click());
+    let close_rect = Rect::from_center_size(rect.right_center() - vec2(15.0, 0.0), vec2(20.0, 20.0));
+    let close = ui.interact(close_rect, resp.id.with("close"), Sense::click()).on_hover_text("Fermer l'onglet");
+    let k = ui.ctx().animate_bool_with_time(resp.id, resp.hovered() || close.hovered(), 0.12);
+    let p = ui.painter();
+    let fill = if active { TILE_ACTIVE } else { TILE_HOVER.gamma_multiply(k) };
+    p.rect(rect, 9.0, fill, Stroke::new(1.0, if active { EDGE_HI } else { EDGE.gamma_multiply(k) }), StrokeKind::Inside);
+    if active {
+        let bar = Rect::from_min_max(rect.left_bottom() + vec2(12.0, -2.0), rect.right_bottom() - vec2(12.0, 0.0));
+        fx::gradient_rect(p, bar, 1.0, ACCENT_HI, CYAN);
+    }
+    icons::at(p, rect.left_center() + vec2(16.0, 0.0), 13.0, icon, color);
+    let fg = if active { TEXT } else { fx::mix(MUTED, TEXT, k) };
+    p.galley(rect.left_center() + vec2(30.0, -galley.size().y / 2.0), galley, fg);
+    if close.hovered() {
+        p.rect_filled(close_rect, 6.0, TILE_HOVER);
+    }
+    icons::at(p, close_rect.center(), 12.0, Icon::Close, if close.hovered() { TEXT } else { FAINT });
+    if close.clicked() { Some(true) } else { resp.clicked().then_some(false) }
 }
 
 /// Read-only viewer with line numbers.
@@ -227,31 +267,36 @@ pub fn viewer(app: &mut App, ui: &mut Ui) {
     let mut close = false;
     let mut copy = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(rel).font(super::theme::bold(14.0)).color(TEXT)).on_hover_text(file.path.display().to_string());
+        ui.set_height(30.0);
+        let (icon, color) = kind(&rel);
+        let (rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+        icons::paint(ui.painter(), rect, icon, color);
+        ui.label(RichText::new(rel).font(theme::bold(14.0)).color(TEXT)).on_hover_text(file.path.display().to_string());
         if file.truncated {
             widgets::chip(ui, "tronqué à 512 Ko", AMBER);
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::ghost(ui, "✕ Fermer").clicked() {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if widgets::pill(ui, Some(Icon::Close), "Fermer", MUTED, false).clicked() {
                 close = true;
             }
-            if widgets::ghost(ui, "⧉ Copier").on_hover_text("Copier le contenu").clicked() {
+            if widgets::pill(ui, Some(Icon::Copy), "Copier", MUTED, false).on_hover_text("Copier le contenu").clicked() {
                 copy = true;
             }
         });
     });
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     let text = file.numbered.clone();
     Frame::new()
         .fill(CODE_BG)
-        .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::same(10))
+        .stroke(Stroke::new(1.0, EDGE))
+        .corner_radius(CornerRadius::same(14))
+        .inner_margin(Margin::same(12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.set_height((ui.available_height() - 12.0).max(120.0));
             ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                ui.add(Label::new(RichText::new(text).monospace().size(12.0).color(TEXT)).wrap_mode(TextWrapMode::Extend));
+                ui.add(Label::new(RichText::new(text).monospace().size(12.0).color(SOFT)).wrap_mode(TextWrapMode::Extend));
             });
         });
     if copy {
@@ -311,15 +356,17 @@ pub fn short(path: &Path, root: &Path) -> String {
     rel.to_string_lossy().replace('\\', "/")
 }
 
-fn icon(name: &str) -> &'static str {
+/// Icon and tint for a file name.
+fn kind(name: &str) -> (Icon, Color32) {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
     match ext.as_str() {
-        "rs" => "🦀",
-        "toml" | "yaml" | "yml" | "json" => "⚙",
-        "md" | "txt" => "📄",
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" => "🖼",
-        "ps1" | "sh" | "bat" => "⌘",
-        _ => "▫",
+        "rs" => (Icon::File, Color32::from_rgb(0xFB, 0x92, 0x3C)),
+        "toml" | "yaml" | "yml" | "json" => (Icon::Gear, AMBER),
+        "md" | "txt" => (Icon::Book, CYAN),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" => (Icon::Image, PINK),
+        "ps1" | "sh" | "bat" => (Icon::Terminal, GREEN),
+        "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "c" | "cpp" | "h" | "java" | "cs" => (Icon::File, ACCENT_HI),
+        _ => (Icon::File, MUTED),
     }
 }
 

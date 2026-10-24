@@ -1,10 +1,10 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{route::Route, tool::ToolKind};
+use super::{engine::Engine, route::Route, savings::Ledger, tool::ToolKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -19,6 +19,28 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+}
+
+/// One block of a Claude answer, in stream order. A tool loop must replay them unchanged:
+/// signed reasoning is checked against the blocks around it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Part {
+    /// Reasoning (empty when the API omits its text) and the signature that carries it.
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    RedactedThinking {
+        data: String,
+    },
+    Text {
+        text: String,
+    },
+    /// Index into the message's `tool_calls`.
+    ToolUse {
+        call: usize,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -43,6 +65,9 @@ pub struct Message {
     pub reasoning: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
+    /// Claude answers: exact block layout, signed reasoning included.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<Part>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -50,9 +75,17 @@ pub struct Message {
     /// Tool messages: unified diff of the file change (shown in the UI, never sent to the model).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff: Option<String>,
+    /// Tool messages: bytes the RTK compressor removed from the raw output (economy ledger).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rtk: u64,
     /// User messages: files changed during this turn can be restored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub checkpoint: bool,
+    /// Engine and exact model id that produced this assistant message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<Engine>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
     pub at: DateTime<Utc>,
 }
 
@@ -65,10 +98,14 @@ impl Message {
             preamble: String::new(),
             reasoning: String::new(),
             tool_calls: Vec::new(),
+            parts: Vec::new(),
             tool_call_id: None,
             route: None,
             diff: None,
+            rtk: 0,
             checkpoint: false,
+            engine: None,
+            model: String::new(),
             at: Utc::now(),
         }
     }
@@ -84,6 +121,13 @@ impl Message {
 
     pub fn assistant(content: String, reasoning: String, tool_calls: Vec<ToolCall>) -> Self {
         Self { reasoning, tool_calls, ..Self::new(Role::Assistant, content) }
+    }
+
+    /// Stamps the model that actually answered, so history stays readable after a switch.
+    pub fn by(mut self, engine: Engine, model: &str) -> Self {
+        self.engine = Some(engine);
+        self.model = model.trim().to_owned();
+        self
     }
 
     pub fn tool(call_id: String, content: String) -> Self {
@@ -110,6 +154,9 @@ pub struct Usage {
     pub cached: u64,
     pub reasoning: u64,
     pub jev: u64,
+    /// Claude: prompt tokens written to the cache (billed at the write premium).
+    #[serde(default)]
+    pub written: u64,
 }
 
 impl Usage {
@@ -129,6 +176,7 @@ impl std::ops::AddAssign for Usage {
         self.cached += o.cached;
         self.reasoning += o.reasoning;
         self.jev += o.jev;
+        self.written += o.written;
     }
 }
 
@@ -148,6 +196,16 @@ pub struct Conversation {
     pub context: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<Summary>,
+    /// Measured token economy of this conversation.
+    #[serde(default)]
+    pub savings: Ledger,
+    /// Claude reasoning is replayed from this message on: earlier blocks were signed against another
+    /// system prompt, tool set or (compacted) history, and only a leading run of them may be dropped.
+    #[serde(default)]
+    pub thinking_from: usize,
+    /// Fingerprint of the system prompt and tool set the replayed reasoning was signed against.
+    #[serde(default)]
+    pub prefix: u64,
     pub messages: Vec<Message>,
 }
 
@@ -163,6 +221,9 @@ impl Default for Conversation {
             usage: Usage::default(),
             context: 0,
             summary: None,
+            savings: Ledger::default(),
+            thinking_from: 0,
+            prefix: 0,
             messages: Vec::new(),
         }
     }
@@ -192,20 +253,35 @@ impl Conversation {
             self.summary = None;
         }
         self.context = 0;
+        self.thinking_from = self.thinking_from.min(from);
     }
 
     /// Answers every dangling tool call (interrupted run) so the API accepts the history.
+    /// A call is answered only by the results that follow its own message: ids repeat across steps (older OpenAI-compatible engines).
     pub fn repair(&mut self) {
-        let answered: HashSet<String> = self.messages.iter().filter_map(|m| m.tool_call_id.clone()).collect();
+        let interrupted = |id: String| Message::tool(id, "ERROR: interrupted by user".into());
         let mut fixed = Vec::with_capacity(self.messages.len());
+        let mut pending: Vec<String> = Vec::new();
         for msg in self.messages.drain(..) {
-            let missing: Vec<String> =
-                msg.tool_calls.iter().filter(|c| !answered.contains(&c.id)).map(|c| c.id.clone()).collect();
+            if msg.role == Role::Tool {
+                if let Some(i) = msg.tool_call_id.as_ref().and_then(|id| pending.iter().position(|p| p == id)) {
+                    pending.remove(i);
+                }
+                fixed.push(msg);
+                continue;
+            }
+            fixed.extend(pending.drain(..).map(interrupted));
+            pending = msg.tool_calls.iter().map(|c| c.id.clone()).collect();
             fixed.push(msg);
-            fixed.extend(missing.into_iter().map(|id| Message::tool(id, "ERROR: interrupted by user".into())));
         }
+        fixed.extend(pending.into_iter().map(interrupted));
         self.messages = fixed;
     }
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 fn title_of(text: &str) -> String {
@@ -231,5 +307,20 @@ mod tests {
         conv.repair();
         assert_eq!(conv.messages.last().and_then(|m| m.tool_call_id.as_deref()), Some("c1"));
         assert_eq!(conv.title, "hi");
+    }
+
+    #[test]
+    fn an_id_answered_in_an_earlier_step_does_not_hide_a_dangling_call() {
+        let call = || ToolCall { id: "functions.grep:0".into(), name: "grep".into(), ..ToolCall::default() };
+        let mut conv = Conversation::default();
+        conv.push(Message::user("hi".into()));
+        conv.push(Message::assistant(String::new(), String::new(), vec![call()]));
+        conv.push(Message::tool("functions.grep:0".into(), "1 hit".into()));
+        conv.push(Message::assistant(String::new(), String::new(), vec![call()]));
+        conv.repair();
+        assert_eq!(conv.messages.len(), 5, "le second appel reçoit sa propre réponse");
+        assert_eq!(conv.messages[4].content, "ERROR: interrupted by user");
+        conv.repair();
+        assert_eq!(conv.messages.len(), 5, "réparer deux fois ne duplique rien");
     }
 }

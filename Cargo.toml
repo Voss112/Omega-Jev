@@ -1,8 +1,8 @@
 [package]
 name = "omega"
-version = "0.3.1"
+version = "0.5.0"
 edition = "2024"
-description = "Omega — agent IA local et anonyme : Jev (System One) route, Kimi K3.1 Pro ou DeepSeek V4.1 Flash (System Two) exécute"
+description = "Omega — agent IA local et anonyme : Jev (System One) route, DeepSeek V4.1 Flash ou Claude (System Two) exécute"
 license = "MIT"
 publish = false
 
@@ -67,7 +67,9 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
-panic = "abort"
+# A panic in a tool or a parser library (untrusted input) must stay a failed tool call, not a crash:
+# the code catches it through JoinError, which needs unwinding.
+panic = "unwind"
 
 [profile.dev.package."*"]
 opt-level = 2

@@ -1,32 +1,38 @@
 //! Right panel: live tool health (green/red), network privacy, session economy, last Jev verdict.
 
-use eframe::egui::{Align, Color32, Layout, ProgressBar, RichText, ScrollArea, Spinner, Ui};
+use eframe::egui::{Align, Color32, FontId, Layout, Rect, ScrollArea, Sense, Ui, pos2, vec2};
 
 use super::{
-    App,
-    theme::{self, ACCENT, AMBER, BORDER, CYAN, FAINT, GREEN, MUTED, RED, SOFT, TEXT},
+    App, fx,
+    icons::{self, Icon},
+    theme::{self, ACCENT, ACCENT_HI, AMBER, CYAN, EDGE, FAINT, GREEN, INDIGO, MUTED, RED, SOFT, TEXT, TILE_HOVER},
     widgets,
 };
-use crate::app::health;
+use crate::{
+    app::health,
+    domain::{auth::AuthMode, models},
+};
 
 pub fn show(app: &mut App, ui: &mut Ui) {
-    ui.add_space(18.0);
+    ui.add_space(16.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Outils").font(theme::bold(17.0)).color(TEXT));
+        ui.set_height(30.0);
+        ui.label(widgets::text("Outils", 16.5, TEXT).font(theme::bold(16.5)));
         let ok = app.health.iter().filter(|h| h.ok).count();
         if !app.health.is_empty() {
             let color = if ok == app.health.len() { GREEN } else { AMBER };
             widgets::chip(ui, format!("{ok}/{} actifs", app.health.len()), color);
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::ghost(ui, "⟳").on_hover_text("Relancer les auto-tests").clicked() {
+            if widgets::icon_button(ui, Icon::Refresh, "Relancer les auto-tests").clicked() {
                 app.refresh_health();
             }
         });
     });
-    ui.add_space(8.0);
+    ui.add_space(4.0);
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         tools(app, ui);
+        engine(app, ui);
         network(app, ui);
         economy(app, ui);
         subscription(app, ui);
@@ -35,40 +41,64 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn row(ui: &mut Ui, ok: bool, name: &str, detail: &str) {
+fn heading(ui: &mut Ui, text: &str) {
+    ui.add_space(14.0);
     ui.horizontal(|ui| {
-        widgets::dot(ui, ok);
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            ui.label(RichText::new(name).size(13.0).color(if ok { TEXT } else { SOFT }));
-            let short: String = detail.chars().take(44).collect();
-            ui.label(RichText::new(short).size(11.0).color(if ok { FAINT } else { RED.gamma_multiply(0.8) }))
-                .on_hover_text(detail);
-        });
+        ui.add_space(4.0);
+        widgets::section(ui, text);
     });
-    ui.add_space(2.0);
+    ui.add_space(4.0);
+}
+
+/// Status line: breathing dot, name, detail elided to the panel width.
+fn row(ui: &mut Ui, ok: bool, name: &str, detail: &str) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
+    let k = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.12);
+    let p = ui.painter();
+    if k > 0.0 {
+        p.rect_filled(rect, 9.0, TILE_HOVER.gamma_multiply(k));
+    }
+    widgets::status(p, rect.left_center() + vec2(12.0, 0.0), if ok { GREEN } else { RED }, fx::now(ui.ctx()));
+    let x = rect.left() + 28.0;
+    let width = rect.right() - x - 8.0;
+    let title = widgets::line(ui, name, FontId::proportional(13.0), if ok { TEXT } else { SOFT }, width);
+    let color = if ok { FAINT } else { RED.gamma_multiply(0.85) };
+    let sub = widgets::line(ui, detail, FontId::proportional(11.0), color, width);
+    let elided = sub.elided;
+    let p = ui.painter();
+    p.galley(pos2(x, rect.top() + 4.0), title, TEXT);
+    p.galley(pos2(x, rect.top() + 21.0), sub, color);
+    if elided {
+        resp.on_hover_text(detail);
+    }
 }
 
 fn tools(app: &mut App, ui: &mut Ui) {
     if app.health.is_empty() {
-        ui.horizontal(|ui| {
-            ui.add(Spinner::new().size(14.0).color(ACCENT));
-            ui.label(RichText::new("Auto-tests en cours…").color(MUTED));
-        });
+        ui.add_space(10.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+        let t = fx::now(ui.ctx());
+        fx::spinner(ui.painter(), rect.left_center() + vec2(12.0, 0.0), 6.0, 2.0, t);
+        let job = fx::shimmer("Auto-tests en cours…", FontId::proportional(13.0), MUTED, TEXT, t);
+        let galley = ui.painter().layout_job(job);
+        ui.painter().galley(rect.left_center() + vec2(28.0, -galley.size().y / 2.0), galley, MUTED);
         return;
     }
     let mut group = "";
     let mut create_rules = false;
     for h in &app.health {
         if h.group != group {
-            ui.add_space(8.0);
-            widgets::section(ui, h.group);
-            ui.add_space(2.0);
+            heading(ui, h.group);
             group = h.group;
         }
         row(ui, h.ok, h.name, &h.detail);
         if h.name == health::RULES_CHECK && !h.ok {
-            create_rules = ui.small_button("➕ Créer OMEGA.md (modèle)").clicked();
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.add_space(22.0);
+                create_rules = widgets::pill(ui, Some(Icon::Plus), "Créer OMEGA.md (modèle)", ACCENT_HI, false).clicked();
+            });
+            ui.add_space(2.0);
         }
     }
     if create_rules {
@@ -76,10 +106,44 @@ fn tools(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// Provider + exact model id + effort: the always-visible answer to "which model runs this?".
+fn engine(app: &App, ui: &mut Ui) {
+    heading(ui, "Moteur actif");
+    let engine = app.settings.engine;
+    let model = app.settings.model(engine).to_owned();
+    let effort = app.settings.effort.get(engine);
+    let mode = match app.settings.auth_mode(engine) {
+        AuthMode::Subscription if engine.subscription_capable() => "abonnement",
+        _ => "clé API",
+    };
+    widgets::card(ui, EDGE, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let (badge, _) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::hover());
+            let p = ui.painter();
+            fx::glow(p, badge, 12.0, ACCENT.gamma_multiply(0.25), 16);
+            fx::gradient_rect(p, badge, 12.0, ACCENT, INDIGO);
+            p.add(fx::edge_light(badge, 12.0, 80.0, 10.0));
+            icons::paint(p, badge.shrink(10.0), Icon::Bolt, Color32::WHITE);
+            ui.add_space(2.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
+                widgets::truncated(ui, &models::name(engine, &model), theme::bold(14.0), TEXT);
+                widgets::truncated(ui, &model, FontId::monospace(11.0), SOFT);
+            });
+        });
+        ui.add_space(6.0);
+        widgets::truncated(
+            ui,
+            &format!("{} · effort {} · {mode}", engine.label(), effort.label()),
+            FontId::proportional(11.5),
+            MUTED,
+        );
+    });
+}
+
 fn network(app: &App, ui: &mut Ui) {
-    ui.add_space(8.0);
-    widgets::section(ui, "Réseau & anonymat");
-    ui.add_space(2.0);
+    heading(ui, "Réseau & anonymat");
     match &app.vpn {
         Some(v) => {
             let detail = [v.tunnel.as_deref(), v.country.as_deref(), v.org.as_deref()]
@@ -108,34 +172,42 @@ fn network(app: &App, ui: &mut Ui) {
     );
 }
 
+/// Key on the left, value right-aligned.
+fn line(ui: &mut Ui, key: &str, value: String) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+    let p = ui.painter();
+    p.text(rect.left_center(), eframe::egui::Align2::LEFT_CENTER, key, FontId::proportional(12.5), MUTED);
+    p.text(rect.right_center(), eframe::egui::Align2::RIGHT_CENTER, value, FontId::monospace(12.0), TEXT);
+}
+
 fn economy(app: &App, ui: &mut Ui) {
     let Some(conv) = app.current_conv() else { return };
     let u = conv.usage;
-    ui.add_space(10.0);
-    widgets::section(ui, "Économie de la session");
-    ui.add_space(4.0);
-    widgets::card(ui, BORDER, |ui| {
+    heading(ui, "Économie de la session");
+    widgets::card(ui, EDGE, |ui| {
         ui.set_width(ui.available_width());
-        let line = |ui: &mut Ui, k: &str, v: String| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(k).size(12.5).color(MUTED));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(v).size(12.5).monospace().color(TEXT))
-                });
-            });
-        };
+        ui.spacing_mut().item_spacing.y = 3.0;
         line(ui, "Entrée", widgets::human(u.prompt));
         line(ui, "Sortie", widgets::human(u.completion));
         line(ui, "Raisonnement", widgets::human(u.reasoning));
         line(ui, "Jev (contrôle)", widgets::human(u.jev));
+        line(ui, "Écrit en cache", widgets::human(u.written));
+        if conv.savings.requests > 0 {
+            line(ui, "Économie mesurée", format!("{:.0} % de l'entrée", conv.savings.saved_share() * 100.0));
+        }
         line(ui, "Outils chargés", conv.toolset.len().to_string());
         line(ui, "Contexte actuel", format!("{} / {}", widgets::human(conv.context), widgets::human(app.settings.compact_at)));
         if let Some(s) = &conv.summary {
             line(ui, "Résumé actif", format!("{} msg condensés", s.upto));
         }
-        ui.add_space(4.0);
-        ui.label(RichText::new(format!("Cache KV : {:.0} % de l'entrée", u.cache_ratio() * 100.0)).size(12.0).color(CYAN));
-        ui.add(ProgressBar::new(u.cache_ratio()).desired_height(6.0).fill(CYAN));
+        ui.add_space(8.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+        let p = ui.painter();
+        p.text(rect.left_center(), eframe::egui::Align2::LEFT_CENTER, "Cache KV", FontId::proportional(12.0), CYAN);
+        let ratio = format!("{:.0} % de l'entrée", u.cache_ratio() * 100.0);
+        p.text(rect.right_center(), eframe::egui::Align2::RIGHT_CENTER, ratio, FontId::monospace(11.5), CYAN);
+        ui.add_space(2.0);
+        widgets::bar(ui, u.cache_ratio(), CYAN, 6.0);
     });
 }
 
@@ -143,76 +215,95 @@ fn subscription(app: &App, ui: &mut Ui) {
     if !app.settings.engine.subscription_capable() {
         return;
     }
-    ui.add_space(10.0);
-    widgets::section(ui, "Abonnement");
-    ui.add_space(4.0);
-    widgets::card(ui, BORDER, |ui| {
+    heading(ui, "Abonnement");
+    widgets::card(ui, EDGE, |ui| {
         ui.set_width(ui.available_width());
         let connected = app.env.llm.subscription();
         let account = app.env.llm.account();
         let label = if connected {
             let suffix = if account.is_empty() { String::new() } else { format!(" · {account}") };
-            format!("✅ {} connecté{suffix}", app.settings.engine.label())
+            format!("{} connecté{suffix}", app.settings.engine.label())
         } else {
-            format!("{} : non connecté (⚙ Paramètres)", app.settings.engine.label())
+            format!("{} : non connecté (Paramètres)", app.settings.engine.label())
         };
-        ui.label(RichText::new(label).size(12.5).color(if connected { GREEN } else { MUTED }));
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+            icons::paint(
+                ui.painter(),
+                rect,
+                if connected { Icon::Check } else { Icon::Key },
+                if connected { GREEN } else { MUTED },
+            );
+            widgets::truncated(ui, &label, FontId::proportional(12.5), if connected { GREEN } else { MUTED });
+        });
         let usage = app.plan_usage.as_ref().filter(|(p, _, _)| p.engine() == app.settings.engine);
         if let Some((_, windows, at)) = usage {
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             for w in windows {
-                ui.horizontal(|ui| {
-                    ui.add_sized([58.0, 16.0], eframe::egui::Label::new(RichText::new(&w.label).size(11.5).color(MUTED)));
-                    ui.add(
-                        ProgressBar::new(w.fraction)
-                            .desired_height(6.0)
-                            .fill(CYAN)
-                            .text(RichText::new(format!("{:.0} %", w.fraction * 100.0)).size(10.5)),
-                    );
-                });
+                let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
+                let p = ui.painter();
+                p.text(rect.left_center(), eframe::egui::Align2::LEFT_CENTER, &w.label, FontId::proportional(11.5), MUTED);
+                let value = format!("{:.0} %", w.fraction * 100.0);
+                p.text(rect.right_center(), eframe::egui::Align2::RIGHT_CENTER, value, FontId::monospace(11.0), TEXT);
+                let color = if w.fraction > 0.85 {
+                    RED
+                } else if w.fraction > 0.6 {
+                    AMBER
+                } else {
+                    CYAN
+                };
+                widgets::bar(ui, w.fraction, color, 5.0);
+                ui.add_space(4.0);
             }
-            ui.label(RichText::new(format!("relevé il y a {} s", at.elapsed().as_secs())).size(10.5).color(FAINT));
+            ui.label(widgets::text(format!("relevé il y a {} s", at.elapsed().as_secs()), 10.5, FAINT));
         }
     });
 }
 
 fn verdict(app: &App, ui: &mut Ui) {
-    ui.add_space(10.0);
-    widgets::section(ui, "Dernier verdict Jev");
-    ui.add_space(4.0);
+    heading(ui, "Dernier verdict Jev");
     let Some(route) = app.current_conv().and_then(|c| c.messages.iter().rev().find_map(|m| m.route.as_ref())) else {
-        widgets::card(ui, BORDER, |ui| {
+        widgets::card(ui, EDGE, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new("Aucun routage pour l'instant").size(12.5).color(SOFT));
-            ui.label(RichText::new("Jev se prononce au premier message envoyé.").size(11.0).color(FAINT));
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                icons::paint(ui.painter(), rect, Icon::Sparkle, FAINT);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    ui.label(widgets::text("Aucun routage pour l'instant", 12.5, SOFT));
+                    ui.label(widgets::text("Jev se prononce au premier message envoyé.", 11.0, FAINT));
+                });
+            });
         });
         return;
     };
-    widgets::card(ui, BORDER, |ui| {
+    widgets::card(ui, EDGE, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(RichText::new(route.skill.label()).font(theme::bold(15.0)).color(TEXT));
+            ui.label(widgets::text(route.skill.label(), 15.0, TEXT).font(theme::bold(15.0)));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let (label, color) = match route.source {
-                    crate::domain::route::Source::Jev => ("⚡ Jev", CYAN),
-                    crate::domain::route::Source::Local => ("◌ local", MUTED),
+                let (label, color, icon) = match route.source {
+                    crate::domain::route::Source::Jev => ("Jev", CYAN, Icon::Bolt),
+                    crate::domain::route::Source::Local => ("local", MUTED, Icon::Gear),
                 };
-                widgets::chip(ui, label, color);
+                widgets::chip_icon(ui, Some(icon), label, color);
             });
         });
         ui.add_space(2.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("confiance").size(11.0).color(FAINT));
-            ui.label(RichText::new(format!("{:.0} %", route.confidence * 100.0)).size(11.5).monospace().color(TEXT));
+            ui.label(widgets::text("confiance", 11.0, FAINT));
+            ui.label(widgets::text(format!("{:.0} %", route.confidence * 100.0), 11.5, TEXT).monospace());
             if route.risky() {
-                widgets::chip(ui, "🛡 revue sécurité", RED);
+                widgets::chip_icon(ui, Some(Icon::Shield), "revue sécurité", RED);
             }
         });
-        ui.add_space(8.0);
+        ui.add_space(10.0);
         let tools = app.current_conv().map_or(0, |c| c.toolset.len());
         ui.columns(2, |cols| {
+            cols[0].spacing_mut().item_spacing.y = 3.0;
+            cols[1].spacing_mut().item_spacing.y = 3.0;
             let left = &mut cols[0];
-            stat(left, "Code", route.code, ACCENT);
+            stat(left, "Code", route.code, ACCENT_HI);
             left.add_space(6.0);
             stat(left, "Risque", route.risk, RED);
             left.add_space(6.0);
@@ -224,50 +315,38 @@ fn verdict(app: &App, ui: &mut Ui) {
             right.add_space(6.0);
             stat_count(right, "Outils", tools);
         });
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            if let Some(p) = &route.playbook {
-                widgets::chip(ui, format!("📘 {p}"), GREEN);
-            }
-            if route.needs_web() {
-                widgets::chip(ui, "🌐 web", CYAN);
-            }
-            if route.needs_apps() {
-                widgets::chip(ui, "🧩 apps", GREEN);
-            }
-        });
+        if route.playbook.is_some() || route.needs_web() || route.needs_apps() {
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                if let Some(p) = &route.playbook {
+                    widgets::chip_icon(ui, Some(Icon::Book), p.clone(), GREEN);
+                }
+                if route.needs_web() {
+                    widgets::chip_icon(ui, Some(Icon::Globe), "web", CYAN);
+                }
+                if route.needs_apps() {
+                    widgets::chip_icon(ui, Some(Icon::Cube), "apps", GREEN);
+                }
+            });
+        }
     });
 }
 
-/// Label, value and a 3 px bar — readable in a 292 px panel.
+/// Label, value and a thin gradient bar — readable in a narrow panel.
 fn stat(ui: &mut Ui, label: &str, value: f32, color: Color32) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(10.5).color(FAINT));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let text = if value > 0.0 { format!("{:.0} %", value * 100.0) } else { "—".to_owned() };
-            ui.label(RichText::new(text).size(11.0).monospace().color(if value > 0.0 { color } else { FAINT }));
-        });
-    });
-    bar(ui, value, color);
+    let text = if value > 0.0 { format!("{:.0} %", value * 100.0) } else { "—".to_owned() };
+    stat_line(ui, label, text, if value > 0.0 { color } else { FAINT });
+    widgets::bar(ui, value, color, 4.0);
 }
 
 fn stat_count(ui: &mut Ui, label: &str, count: usize) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(10.5).color(FAINT));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new(count.to_string()).size(11.0).monospace().color(TEXT));
-        });
-    });
-    bar(ui, (count as f32 / 8.0).min(1.0), MUTED);
+    stat_line(ui, label, count.to_string(), TEXT);
+    widgets::bar(ui, (count as f32 / 8.0).min(1.0), MUTED, 4.0);
 }
 
-fn bar(ui: &mut Ui, value: f32, color: Color32) {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(eframe::egui::vec2(width, 3.0), eframe::egui::Sense::hover());
+fn stat_line(ui: &mut Ui, label: &str, value: String, color: Color32) {
+    let (rect, _): (Rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(rect, 2.0, BORDER);
-    if value > 0.0 {
-        let filled = eframe::egui::Rect::from_min_size(rect.min, eframe::egui::vec2(width * value.clamp(0.0, 1.0), 3.0));
-        p.rect_filled(filled, 2.0, color);
-    }
+    p.text(rect.left_center(), eframe::egui::Align2::LEFT_CENTER, label, FontId::proportional(10.5), FAINT);
+    p.text(rect.right_center(), eframe::egui::Align2::RIGHT_CENTER, value, FontId::monospace(11.0), color);
 }

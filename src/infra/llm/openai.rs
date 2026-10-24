@@ -1,4 +1,4 @@
-//! OpenAI-compatible wire (Kimi, DeepSeek, Gemini API-key endpoint).
+//! OpenAI-compatible wire (DeepSeek).
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -12,7 +12,7 @@ use crate::domain::{
 
 pub const MAX_OUTPUT: u32 = 65_536;
 
-/// Streaming request body with the user's effort. Kimi: `temperature`/`top_p` are server-fixed, omitted.
+/// Streaming request body with the user's effort.
 pub fn body(model: &str, engine: Engine, effort: Effort, messages: &[Value], tools: Option<Value>) -> Value {
     let mut body = json!({
         "model": model,
@@ -23,13 +23,9 @@ pub fn body(model: &str, engine: Engine, effort: Effort, messages: &[Value], too
     if let Some(e) = effort.openai() {
         body["reasoning_effort"] = json!(e);
     }
-    match engine {
-        Engine::Kimi => body["max_completion_tokens"] = json!(MAX_OUTPUT),
-        Engine::DeepSeek => {
-            body["max_tokens"] = json!(MAX_OUTPUT);
-            body["thinking"] = json!({ "type": "enabled" });
-        }
-        Engine::Claude | Engine::Gemini => {}
+    if engine == Engine::DeepSeek {
+        body["max_tokens"] = json!(MAX_OUTPUT);
+        body["thinking"] = json!({ "type": "enabled" });
     }
     if let Some(tools) = tools {
         body["tools"] = tools;
@@ -38,11 +34,18 @@ pub fn body(model: &str, engine: Engine, effort: Effort, messages: &[Value], too
 }
 
 pub fn apply(out: &mut Completion, data: &str, on: &mut impl FnMut(Delta<'_>)) -> Result<()> {
-    let chunk: Chunk = serde_json::from_str(data).with_context(|| format!("flux invalide: {data:.160}"))?;
+    let raw: Value = serde_json::from_str(data).with_context(|| format!("flux invalide: {data:.160}"))?;
+    if let Some(message) = super::stream_error(&raw) {
+        anyhow::bail!("erreur du fournisseur pendant le flux : {message}");
+    }
+    let chunk: Chunk = serde_json::from_value(raw).with_context(|| format!("flux invalide: {data:.160}"))?;
     if let Some(u) = chunk.usage.as_ref().or_else(|| chunk.choices.iter().find_map(|c| c.usage.as_ref())) {
         out.usage = usage(u);
     }
     for choice in chunk.choices {
+        if let Some(reason) = choice.finish_reason.filter(|r| !r.is_empty()) {
+            out.stop = reason;
+        }
         let delta = choice.delta;
         if let Some(t) = delta.reasoning_content.filter(|t| !t.is_empty()) {
             on(Delta::Reasoning(&t));
@@ -69,7 +72,7 @@ pub fn apply(out: &mut Completion, data: &str, on: &mut impl FnMut(Delta<'_>)) -
     Ok(())
 }
 
-/// Usage with every known cached-token field (OpenAI `prompt_tokens_details`, Moonshot `cached_tokens`, DeepSeek-style).
+/// Usage with every known cached-token field (OpenAI `prompt_tokens_details`, top-level `cached_tokens`, DeepSeek-style).
 pub fn usage(u: &Value) -> Usage {
     let n = |ptr: &str| u.pointer(ptr).and_then(Value::as_u64);
     Usage {
@@ -81,6 +84,7 @@ pub fn usage(u: &Value) -> Usage {
             .unwrap_or(0),
         reasoning: n("/completion_tokens_details/reasoning_tokens").unwrap_or(0),
         jev: 0,
+        written: 0,
     }
 }
 
@@ -97,6 +101,8 @@ struct Choice {
     delta: WireDelta,
     /// Some OpenAI-compatible servers put the final usage inside the choice.
     usage: Option<Value>,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -146,5 +152,25 @@ mod tests {
         assert_eq!((out.content.as_str(), out.reasoning.as_str(), seen.as_str()), ("Hi", "think ", "Hi"));
         assert_eq!(out.tool_calls[0].arguments, r#"{"pattern":"x"}"#);
         assert_eq!((out.usage.prompt, out.usage.cached), (100, 80));
+    }
+
+    #[test]
+    fn an_error_inside_the_stream_is_reported() {
+        let mut out = Completion::default();
+        let err = apply(&mut out, r#"{"error":{"message":"quota exceeded"}}"#, &mut |_| {}).unwrap_err();
+        assert!(err.to_string().contains("quota exceeded"));
+        apply(&mut out, r#"{"choices":[{"delta":{},"finish_reason":"content_filter"}]}"#, &mut |_| {}).unwrap();
+        assert_eq!(out.stop, "content_filter");
+    }
+
+    #[test]
+    fn tools_pass_through_unchanged_and_off_omits_reasoning() {
+        let tools = json!([
+            { "type": "function", "function": { "name": "audit_kit", "parameters": { "type": "object", "properties": {} } } },
+        ]);
+        let b = body("deepseek-flash", Engine::DeepSeek, Effort::Max, &[], Some(tools.clone()));
+        assert_eq!(b["reasoning_effort"], "max");
+        assert_eq!(b["tools"], tools);
+        assert!(body("deepseek-flash", Engine::DeepSeek, Effort::Off, &[], None).get("reasoning_effort").is_none());
     }
 }

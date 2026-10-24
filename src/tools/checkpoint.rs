@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -73,9 +73,10 @@ impl Checkpoint {
         let manifest = self.load();
         for entry in manifest.entries.iter().rev() {
             match &entry.backup {
-                Some(name) => {
+                Some(name) if backup_name(name) => {
                     fs::copy(self.dir.join(name), &entry.path).with_context(|| format!("restore {}", entry.path.display()))?;
                 }
+                Some(_) => bail!("checkpoint corrompu : nom de sauvegarde inattendu"),
                 None => {
                     let _ = fs::remove_file(&entry.path);
                 }
@@ -84,6 +85,11 @@ impl Checkpoint {
         fs::remove_dir_all(&self.dir)?;
         Ok(manifest.entries.len())
     }
+}
+
+/// Backup files are named `<index>.orig`; anything else in a manifest is refused.
+fn backup_name(name: &str) -> bool {
+    name.strip_suffix(".orig").is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Deletes turn checkpoints older than `max_age` (disk hygiene, run at startup).
@@ -116,5 +122,18 @@ mod tests {
         assert_eq!(cp.restore().unwrap(), 2);
         assert_eq!(fs::read_to_string(&edited).unwrap(), "v1");
         assert!(!created.exists() && !cp.exists());
+    }
+
+    #[test]
+    fn a_tampered_manifest_cannot_copy_from_outside_the_checkpoint() {
+        let dir = std::env::temp_dir().join("omega-test-checkpoint-traversal");
+        let _ = fs::remove_dir_all(&dir);
+        let cp = Checkpoint { dir: dir.join("cp") };
+        fs::create_dir_all(&cp.dir).unwrap();
+        fs::write(dir.join("victim.txt"), "secret").unwrap();
+        let manifest = format!(r#"{{"entries":[{{"path":"{}","backup":"../../victim.txt"}}]}}"#, dir.join("out.txt").display());
+        fs::write(cp.manifest_path(), manifest.replace('\\', "\\\\")).unwrap();
+        assert!(cp.restore().is_err(), "un nom de sauvegarde hors dossier doit être refusé");
+        assert!(!dir.join("out.txt").exists());
     }
 }

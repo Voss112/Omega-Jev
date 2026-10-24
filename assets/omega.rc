@@ -1,8 +1,9 @@
-1 ICON "omega.ico"
+// Template: build.rs fills the @...@ placeholders (version from Cargo.toml, absolute icon path).
+1 ICON "@ICON@"
 
 1 VERSIONINFO
-FILEVERSION 0,3,1,0
-PRODUCTVERSION 0,3,1,0
+FILEVERSION @MAJOR@,@MINOR@,@PATCH@,0
+PRODUCTVERSION @MAJOR@,@MINOR@,@PATCH@,0
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -12,11 +13,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "Omega"
       VALUE "FileDescription", "Omega - agent IA local et anonyme"
-      VALUE "FileVersion", "0.3.1"
+      VALUE "FileVersion", "@VERSION@"
       VALUE "InternalName", "omega"
       VALUE "OriginalFilename", "omega.exe"
       VALUE "ProductName", "Omega"
-      VALUE "ProductVersion", "0.3.1"
+      VALUE "ProductVersion", "@VERSION@"
     END
   END
   BLOCK "VarFileInfo"

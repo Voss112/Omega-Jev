@@ -9,9 +9,11 @@ impl App {
     pub(super) fn pump(&mut self) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
-                Event::Routed { conv, route, preamble, toolset } => {
+                Event::Routed { conv, route, preamble, toolset, thinking_from, prefix } => {
                     if let Some(c) = self.conv_mut(conv) {
                         c.toolset = toolset;
+                        c.thinking_from = thinking_from;
+                        c.prefix = prefix;
                         if let Some(m) = c.last_user_mut() {
                             m.route = Some(route);
                             m.preamble = preamble;
@@ -35,6 +37,12 @@ impl App {
                 Event::Usage { conv, usage } => {
                     if let Some(c) = self.conv_mut(conv) {
                         c.usage += usage;
+                    }
+                }
+                Event::Measured { conv, sample, thinking_from } => {
+                    if let Some(c) = self.conv_mut(conv) {
+                        c.savings.record(&sample);
+                        c.thinking_from = thinking_from;
                     }
                 }
                 Event::Context { conv, tokens } => {
@@ -70,9 +78,22 @@ impl App {
                     self.files.invalidate();
                 }
                 Event::Health(h) => self.health = h,
+                Event::Bench(rows) => {
+                    self.bench = Some(rows);
+                    self.bench_running = false;
+                }
                 Event::Vpn(v) => self.vpn = Some(v),
                 Event::Connected { provider, result } => self.connected(provider, result),
                 Event::PlanUsage { provider, windows } => self.plan_usage = Some((provider, windows, Instant::now())),
+                Event::Models { engine, result } => match result {
+                    Ok(models) => {
+                        self.catalog.insert(engine, models);
+                        self.catalog_error.remove(&engine);
+                    }
+                    Err(e) => {
+                        self.catalog_error.insert(engine, e);
+                    }
+                },
             }
         }
     }

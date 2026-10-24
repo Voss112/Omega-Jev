@@ -1,20 +1,27 @@
-//! Prompt box: Enter sends, Shift+Enter new line, engine badge, send/stop.
+//! Prompt box: Enter sends, Shift+Enter new line, engine/model/effort pickers, send/stop.
 
 use eframe::egui::{
-    Align, Align2, Color32, ComboBox, CornerRadius, FontId, Frame, Id, Key, Layout, Margin, Modifiers, Rect, RichText,
-    ScrollArea, Sense, Stroke, TextEdit, Ui, vec2,
+    Align, Align2, Color32, FontId, Frame, Id, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Sense, Shape, Stroke, StrokeKind,
+    TextEdit, Ui, epaint::RectShape, pos2, vec2,
 };
 
 use super::{
     App, attach,
     chat::column,
-    theme::{ACCENT, AMBER, BORDER, FAINT, HOVER, MUTED, RAISED, RED, TEXT},
+    fx,
+    icons::{self, Icon},
+    theme::{self, ACCENT, ACCENT_HI, AMBER, CYAN, FAINT, INDIGO, MUTED, RED, SOFT, TEXT},
+    widgets,
 };
 use crate::domain::{
     auth::AuthMode,
     engine::{Effort, Engine},
+    models,
     settings::Settings,
 };
+
+const RADIUS: f32 = 22.0;
+const SEND: f32 = 38.0;
 
 pub fn show(app: &mut App, ui: &mut Ui) {
     let id = Id::unique("composer");
@@ -26,93 +33,104 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let mut schedule = false;
     let mut pick = false;
     let ctx = ui.ctx().clone();
+    let t = fx::now(&ctx);
     app.collect_images(&ctx);
     column(ui, |ui| {
         if app.editing.is_some() {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(
-                        "✏ Modification : les messages suivants et leurs changements de fichiers seront annulés à l'envoi.",
-                    )
-                    .size(12.0)
-                    .color(AMBER),
-                );
-                cancel_edit = ui.small_button("Annuler (Échap)").clicked();
-            });
-            ui.add_space(4.0);
+            cancel_edit = editing_banner(ui);
+            ui.add_space(6.0);
         }
-        Frame::new()
-            .fill(RAISED)
-            .stroke(Stroke::new(1.0, if focused { ACCENT.gamma_multiply(0.7) } else { BORDER }))
-            .corner_radius(CornerRadius::same(18))
-            .inner_margin(Margin { left: 16, right: 10, top: 12, bottom: 8 })
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                if !app.shots.is_empty() {
-                    let (shots, tex) = (&app.shots, &mut app.tex);
-                    let mut remove = None;
-                    ui.horizontal_wrapped(|ui| {
-                        let ctx = ui.ctx().clone();
-                        for (i, img) in shots.iter().enumerate() {
-                            if attach::thumb(ui, &ctx, tex, img, 64.0, true) {
-                                remove = Some(i);
-                            }
+        let bg = ui.painter().add(Shape::Noop);
+        let frame = Frame::new().inner_margin(Margin { left: 18, right: 12, top: 14, bottom: 10 }).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            if !app.shots.is_empty() {
+                let (shots, tex) = (&app.shots, &mut app.tex);
+                let mut remove = None;
+                ui.horizontal_wrapped(|ui| {
+                    let ctx = ui.ctx().clone();
+                    for (i, img) in shots.iter().enumerate() {
+                        if attach::thumb(ui, &ctx, tex, img, 64.0, true) {
+                            remove = Some(i);
                         }
-                    });
-                    if let Some(i) = remove {
-                        app.shots.remove(i);
                     }
-                    ui.add_space(6.0);
+                });
+                if let Some(i) = remove {
+                    app.shots.remove(i);
                 }
-                ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                    let edit = TextEdit::multiline(&mut app.draft)
-                        .id(id)
-                        .hint_text("Demandez n'importe quoi…   Entrée : envoyer · Maj+Entrée : nouvelle ligne")
-                        .frame(Frame::NONE)
-                        .desired_rows(2)
-                        .desired_width(f32::INFINITY)
-                        .font(FontId::proportional(15.0))
-                        .text_color(TEXT);
-                    let resp = ui.add(edit);
-                    if app.focus_composer {
-                        resp.request_focus();
-                        app.focus_composer = false;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui
-                        .add(eframe::egui::Button::new(RichText::new("🖼").size(15.0).color(MUTED)).frame(false))
-                        .on_hover_text("Joindre une image — glisser-déposer et Ctrl+V marchent aussi")
-                        .clicked()
-                    {
-                        pick = true;
-                    }
-                    engine_picker(app, ui);
-                    bypass_toggle(app, ui);
-                    if ui
-                        .add(eframe::egui::Button::new(RichText::new("⏰ Programmer").size(12.5).color(MUTED)).frame(false))
-                        .on_hover_text("Envoyer ce prompt plus tard, avec le moteur et l'effort choisis (toujours en bypass)")
-                        .clicked()
-                    {
-                        schedule = true;
-                    }
-                    ui.label(RichText::new(app.settings.style.label()).size(11.5).color(FAINT))
-                        .on_hover_text("Style de sortie (Paramètres)");
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let clicked = action_button(ui, busy, !app.draft.trim().is_empty());
-                        send |= clicked && !busy;
-                        stop |= clicked && busy;
-                    });
-                });
+                ui.add_space(6.0);
+            }
+            ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                let edit = TextEdit::multiline(&mut app.draft)
+                    .id(id)
+                    .hint_text("Demandez n'importe quoi…")
+                    .frame(Frame::NONE)
+                    .desired_rows(2)
+                    .desired_width(f32::INFINITY)
+                    .font(FontId::proportional(15.0))
+                    .text_color(TEXT);
+                let resp = ui.add(edit);
+                if app.focus_composer {
+                    resp.request_focus();
+                    app.focus_composer = false;
+                }
             });
-        ui.add_space(4.0);
-        ui.vertical_centered(|ui| {
-            ui.label(
-                RichText::new("Omega peut se tromper. Vérifiez le code critique.  ·  Ctrl+N nouvelle discussion · Échap stop")
-                    .size(11.0)
-                    .color(FAINT),
-            );
+            ui.add_space(6.0);
+            let toolbar = ui
+                .allocate_ui_with_layout(
+                    vec2(ui.available_width() - SEND - 10.0, 30.0),
+                    Layout::left_to_right(Align::Center).with_main_wrap(true),
+                    |ui| {
+                        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                        let compact = ui.available_width() < 760.0;
+                        if widgets::icon_button(ui, Icon::Image, "Joindre une image — glisser-déposer et Ctrl+V marchent aussi")
+                            .clicked()
+                        {
+                            pick = true;
+                        }
+                        engine_picker(app, ui);
+                        bypass_toggle(app, ui, t);
+                        if widgets::pill(ui, Some(Icon::Clock), if compact { "" } else { "Programmer" }, MUTED, false)
+                            .on_hover_text("Envoyer ce prompt plus tard, avec le moteur et l'effort choisis (toujours en bypass)")
+                            .clicked()
+                        {
+                            schedule = true;
+                        }
+                    },
+                )
+                .response
+                .rect;
+            let right = ui.max_rect().right();
+            let button = Rect::from_center_size(pos2(right - SEND / 2.0, toolbar.bottom() - 15.0), vec2(SEND, SEND));
+            let clicked = action_button(ui, button, busy, !app.draft.trim().is_empty() || !app.shots.is_empty(), t);
+            send |= clicked && !busy;
+            stop |= clicked && busy;
+            if app.model_input.is_some() {
+                ui.add_space(6.0);
+                custom_model(app, ui);
+            }
         });
+        let rect = frame.response.rect;
+        let k = ui.ctx().animate_bool_with_time(id.with("focus"), focused, 0.25);
+        let p = ui.painter();
+        let mut shapes = vec![
+            Shape::Rect(
+                eframe::egui::Shadow { offset: [0, 12], blur: 36, spread: 0, color: Color32::from_black_alpha(130) }
+                    .as_shape(rect, RADIUS),
+            ),
+            fx::halo(rect, RADIUS, fx::mix(ACCENT, CYAN, 0.3).gamma_multiply(0.06 + 0.16 * k), (20.0 + 18.0 * k) as u8),
+            RectShape::filled(rect, RADIUS, theme::rgba(14, 16, 28, 214)).into(),
+            fx::edge_light(rect, RADIUS, 44.0, 16.0),
+        ];
+        if k > 0.0 {
+            shapes.push(fx::border(rect, RADIUS, 1.5, fx::conic(rect, t, 0.95 * k)));
+        }
+        if ui.ctx().input(|i| !i.raw.hovered_files.is_empty()) {
+            shapes.push(Shape::rect_stroke(rect, RADIUS, Stroke::new(2.0, CYAN), StrokeKind::Inside));
+            p.text(rect.center(), Align2::CENTER_CENTER, "Déposez l'image ici", FontId::proportional(14.0), CYAN);
+        }
+        p.set(bg, Shape::Vec(shapes));
+        ui.add_space(8.0);
+        hints(ui, app.settings.style.label());
     });
     if cancel_edit {
         app.cancel_edit();
@@ -137,52 +155,217 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// Amber strip shown while a sent message is being edited; returns `true` on cancel.
+fn editing_banner(ui: &mut Ui) -> bool {
+    let mut cancel = false;
+    let bg = ui.painter().add(Shape::Noop);
+    let frame = Frame::new().inner_margin(Margin { left: 12, right: 6, top: 4, bottom: 4 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+            icons::paint(ui.painter(), rect, Icon::Pencil, AMBER);
+            let width = (ui.available_width() - 150.0).max(60.0);
+            ui.allocate_ui(vec2(width, 30.0), |ui| {
+                widgets::truncated(
+                    ui,
+                    "Modification : les messages suivants et leurs changements de fichiers seront annulés à l'envoi.",
+                    FontId::proportional(12.5),
+                    AMBER,
+                );
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                cancel = widgets::pill(ui, Some(Icon::Close), "Annuler (Échap)", SOFT, false).clicked();
+            });
+        });
+    });
+    let rect = frame.response.rect;
+    let p = ui.painter();
+    p.set(
+        bg,
+        Shape::Vec(vec![
+            fx::gradient_fill(p, rect, 12.0, AMBER.gamma_multiply(0.13), AMBER.gamma_multiply(0.04)),
+            RectShape::stroke(rect, 12.0, Stroke::new(1.0, AMBER.gamma_multiply(0.35)), StrokeKind::Inside).into(),
+        ]),
+    );
+    cancel
+}
+
+/// Keyboard hints under the box; trailing items drop out when the column is narrow.
+fn hints(ui: &mut Ui, style: &str) {
+    let items: [(&str, &str); 4] =
+        [("Entrée", "envoyer"), ("Maj+Entrée", "nouvelle ligne"), ("Ctrl+N", "nouvelle discussion"), ("Échap", "stop")];
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+    let font = FontId::proportional(11.0);
+    let key_font = FontId::monospace(10.0);
+    let p = ui.painter();
+    let mut pieces = Vec::new();
+    let mut total = 0.0;
+    let tail = p.layout_no_wrap(format!("Style {style}  ·  Omega peut se tromper"), font.clone(), FAINT);
+    for (key, what) in items {
+        let k = p.layout_no_wrap(key.to_owned(), key_font.clone(), MUTED);
+        let w = p.layout_no_wrap(what.to_owned(), font.clone(), FAINT);
+        let width = k.size().x + 10.0 + 5.0 + w.size().x + 16.0;
+        if total + width > row.width() {
+            break;
+        }
+        total += width;
+        pieces.push((k, w));
+    }
+    let show_tail = total + tail.size().x <= row.width();
+    if show_tail {
+        total += tail.size().x;
+    }
+    let mut x = row.center().x - total / 2.0;
+    let cy = row.center().y;
+    for (k, w) in pieces {
+        let cap = Rect::from_min_size(pos2(x, cy - 8.0), vec2(k.size().x + 10.0, 16.0));
+        p.rect(cap, 4.0, theme::TILE, Stroke::new(1.0, theme::EDGE_HI), StrokeKind::Inside);
+        let kw = k.size();
+        p.galley(cap.center() - kw / 2.0, k, MUTED);
+        x = cap.right() + 5.0;
+        let ww = w.size();
+        p.galley(pos2(x, cy - ww.y / 2.0), w, FAINT);
+        x += ww.x + 16.0;
+    }
+    if show_tail {
+        let size = tail.size();
+        p.galley(pos2(x, cy - size.y / 2.0), tail, FAINT);
+    }
+}
+
 /// Bypass permissions: one click, clearly red while active.
-fn bypass_toggle(app: &mut App, ui: &mut Ui) {
+fn bypass_toggle(app: &mut App, ui: &mut Ui, t: f64) {
     let on = app.settings.bypass;
-    let text = RichText::new(if on { "🔓 Bypass" } else { "🔒 Permissions" }).size(12.5).color(if on { RED } else { MUTED });
     let tip = if on {
         "Bypass actif : commandes, installations et modifications sont acceptées sans demander (les commandes destructrices restent bloquées). Cliquer pour revenir aux demandes."
     } else {
         "Cliquer pour accepter automatiquement toutes les autorisations (mode Bypass)."
     };
-    if ui.button(text).on_hover_text(tip).clicked() {
+    let resp = if on {
+        let galley = widgets::line(ui, "Bypass", FontId::proportional(13.0), RED, 200.0);
+        let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 44.0, 30.0), Sense::click());
+        let k = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.14);
+        let p = ui.painter();
+        fx::glow(p, rect, 10.0, RED.gamma_multiply(0.10 + 0.08 * fx::pulse(t, 2.4) + 0.1 * k), 16);
+        p.rect(rect, 10.0, RED.gamma_multiply(0.13 + 0.06 * k), Stroke::new(1.0, RED.gamma_multiply(0.45)), StrokeKind::Inside);
+        icons::at(p, rect.left_center() + vec2(18.0, 0.0), 15.0, Icon::Unlock, RED);
+        p.galley(rect.left_center() + vec2(32.0, -galley.size().y / 2.0), galley, RED);
+        resp
+    } else {
+        widgets::pill(ui, Some(Icon::Lock), "Permissions", MUTED, false)
+    };
+    if resp.on_hover_text(tip).clicked() {
         app.apply_settings(Settings { bypass: !on, ..app.settings.clone() });
     }
 }
 
-/// Engine switch plus the effort of the active engine. Both are user choices, never the router's.
+/// Provider switch, exact model of that provider, and effort. All three are user choices, never the router's.
 fn engine_picker(app: &mut App, ui: &mut Ui) {
     let mode = |e: Engine| app.settings.auth_mode(e);
     let mut engine = app.settings.engine;
-    ComboBox::from_id_salt("engine")
-        .selected_text(RichText::new(engine_label(engine, mode(engine))).size(12.5).color(MUTED))
-        .width(220.0)
-        .show_ui(ui, |ui| {
-            for e in Engine::ALL {
-                ui.selectable_value(&mut engine, e, engine_label(e, mode(e)));
+    let (resp, _) = widgets::dropdown(ui, Some(Icon::Bolt), &engine_short(engine, mode(engine)), 200.0, |ui| {
+        for e in Engine::ALL {
+            if widgets::menu_item(ui, e == engine, &engine_short(e, mode(e))).clicked() {
+                engine = e;
             }
-        })
-        .response
-        .on_hover_text("Moteur qui exécute (System Two). Jev choisit toujours skill, outils et playbook.");
+        }
+    });
+    resp.on_hover_text("Fournisseur qui exécute (System Two). Jev choisit toujours skill, outils et playbook.");
     if engine != app.settings.engine {
-        app.apply_settings(Settings { engine, ..app.settings.clone() });
+        let mut settings = app.settings.clone();
+        settings.engine = engine;
+        app.apply_settings(settings);
+        app.refresh_models(engine);
         if !app.env.llm.configured() {
             app.settings_draft = Some(app.settings.clone());
         }
     }
+    model_picker(app, ui);
+    effort_picker(app, ui);
+}
 
-    let mut effort = app.settings.effort.get(app.settings.engine);
-    ComboBox::from_id_salt("effort")
-        .selected_text(RichText::new(effort_label(effort)).size(12.5).color(MUTED))
-        .width(180.0)
-        .show_ui(ui, |ui| {
-            for e in Effort::ALL {
-                ui.selectable_value(&mut effort, e, effort_label(e));
+/// Exact model id sent to the provider: the account list when reachable, the catalogue otherwise.
+fn model_picker(app: &mut App, ui: &mut Ui) {
+    let engine = app.settings.engine;
+    let current = app.settings.model(engine).to_owned();
+    let fetched = app.catalog.get(&engine).map_or(&[][..], Vec::as_slice);
+    let choices = models::choices(engine, &current, fetched);
+    let tip = match app.catalog_error.get(&engine) {
+        Some(e) => format!("Modèle envoyé à l'API : {current}\nListe du compte indisponible : {e}"),
+        None => format!("Modèle envoyé à l'API : {current}\n{} modèle(s) connu(s) pour ce compte", fetched.len()),
+    };
+    let mut picked = current.clone();
+    let mut custom = false;
+    let (resp, _) = widgets::dropdown(ui, None, &models::name(engine, &current), 190.0, |ui| {
+        for choice in &choices {
+            if widgets::menu_item(ui, choice.id == picked, &choice.label()).clicked() {
+                picked.clone_from(&choice.id);
             }
-        })
-        .response
-        .on_hover_text("Budget de réflexion du moteur actif. Off = réponse directe, sans réflexion.");
+        }
+        ui.separator();
+        if widgets::menu_item(ui, app.model_input.is_some(), "Autre identifiant…").clicked() {
+            custom = true;
+        }
+    });
+    resp.on_hover_text(tip);
+    if custom {
+        app.model_input = Some(current.clone());
+    }
+    if picked != current && !picked.trim().is_empty() {
+        pick_model(app, &picked);
+    }
+    if widgets::icon_button(ui, Icon::Refresh, "Récupérer la liste des modèles de ce compte").clicked() {
+        app.refresh_models(engine);
+    }
+}
+
+/// Free-form id for a model the provider list does not show yet.
+fn custom_model(app: &mut App, ui: &mut Ui) {
+    let Some(mut input) = app.model_input.take() else { return };
+    let mut keep = true;
+    ui.horizontal(|ui| {
+        let resp = ui.add(
+            TextEdit::singleline(&mut input)
+                .desired_width(280.0)
+                .font(FontId::proportional(12.5))
+                .margin(Margin::symmetric(10, 6))
+                .hint_text("identifiant exact, ex. claude-opus-5-5"),
+        );
+        let submit = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+        if widgets::pill(ui, Some(Icon::Check), "OK", ACCENT_HI, false).clicked() || submit {
+            let id = input.trim().to_owned();
+            if !id.is_empty() {
+                pick_model(app, &id);
+            }
+            keep = false;
+        }
+        if widgets::icon_button(ui, Icon::Close, "Annuler").clicked() {
+            keep = false;
+        }
+    });
+    if keep {
+        app.model_input = Some(input);
+    }
+}
+
+fn pick_model(app: &mut App, id: &str) {
+    app.model_input = None;
+    let mut settings = app.settings.clone();
+    settings.set_model(settings.engine, id);
+    app.apply_settings(settings);
+}
+
+fn effort_picker(app: &mut App, ui: &mut Ui) {
+    let mut effort = app.settings.effort.get(app.settings.engine);
+    let label = format!("effort {}", effort.label());
+    let (resp, _) = widgets::dropdown(ui, None, &label, 140.0, |ui| {
+        for e in Effort::ALL {
+            if widgets::menu_item(ui, e == effort, &effort_label(e)).clicked() {
+                effort = e;
+            }
+        }
+    });
+    resp.on_hover_text("Budget de réflexion du moteur actif. Off = réponse directe, sans réflexion.");
     if effort != app.settings.effort.get(app.settings.engine) {
         let mut settings = app.settings.clone();
         settings.effort.set(settings.engine, effort);
@@ -190,37 +373,52 @@ fn engine_picker(app: &mut App, ui: &mut Ui) {
     }
 }
 
-pub(super) fn engine_label(engine: Engine, mode: AuthMode) -> String {
+/// Provider and how it is paid, short enough for a pill.
+pub(super) fn engine_short(engine: Engine, mode: AuthMode) -> String {
+    let name = engine.label().split_whitespace().next().unwrap_or_default();
     let tag = match mode {
         AuthMode::Subscription if engine.subscription_capable() => "abonnement",
         _ => "clé API",
     };
-    format!("⚡ {} · {tag}", engine.label())
+    format!("{name} · {tag}")
 }
 
 pub(super) fn effort_label(effort: Effort) -> String {
-    if effort == Effort::Off {
-        "effort Off (sans réflexion)".to_owned()
-    } else {
-        format!("effort {}", effort.label())
-    }
+    if effort == Effort::Off { "effort Off (sans réflexion)".to_owned() } else { format!("effort {}", effort.label()) }
 }
 
-/// Round send (↑) / stop (■) button.
-fn action_button(ui: &mut Ui, busy: bool, ready: bool) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
+/// Round send (↑) / stop (■) button: gradient orb, glow when ready, red pulse while running.
+fn action_button(ui: &mut Ui, rect: Rect, busy: bool, ready: bool, t: f64) -> bool {
+    let resp = ui.interact(rect, Id::unique("composer-send"), Sense::click());
+    let k = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.15);
+    let on = ui.ctx().animate_bool_with_time(resp.id.with("ready"), ready || busy, 0.2);
+    let rect = if resp.is_pointer_button_down_on() { rect.shrink(1.5) } else { rect };
     let p = ui.painter();
-    let color = match (busy, ready, resp.hovered()) {
-        (true, _, _) => RED,
-        (false, true, true) => ACCENT.gamma_multiply(1.2),
-        (false, true, false) => ACCENT,
-        (false, false, _) => HOVER,
-    };
-    p.circle_filled(rect.center(), 18.0, color);
+    let r = rect.width() / 2.0;
     if busy {
-        p.rect_filled(Rect::from_center_size(rect.center(), vec2(11.0, 11.0)), CornerRadius::same(2), Color32::WHITE);
+        fx::glow(p, rect, r, RED.gamma_multiply(0.22 + 0.16 * fx::pulse(t, 1.4)), 18);
+        fx::gradient_rect(p, rect, r, fx::mix(RED, Color32::WHITE, 0.1 * k), Color32::from_rgb(0xE1, 0x1D, 0x48));
     } else {
-        p.text(rect.center(), Align2::CENTER_CENTER, "↑", FontId::proportional(19.0), if ready { Color32::WHITE } else { MUTED });
+        if on > 0.0 {
+            fx::glow(p, rect, r, ACCENT.gamma_multiply((0.28 + 0.2 * k) * on), (16.0 + 10.0 * k) as u8);
+        }
+        p.circle_filled(rect.center(), r, theme::rgba(255, 255, 255, 14));
+        if on > 0.0 {
+            let shape = RectShape::filled(rect, r, Color32::WHITE);
+            let grad = fx::linear(
+                rect,
+                fx::mix(ACCENT, ACCENT_HI, 0.3 * k).gamma_multiply(on),
+                INDIGO.gamma_multiply(on),
+                vec2(1.0, 1.0),
+            );
+            fx::paint_with(p, shape, grad);
+        }
+    }
+    p.add(fx::edge_light(rect, r, 70.0 * on.max(0.4), 10.0));
+    if busy {
+        icons::at(p, rect.center(), 16.0, Icon::Stop, Color32::WHITE);
+    } else {
+        icons::at(p, rect.center(), 18.0, Icon::ArrowUp, fx::mix(MUTED, Color32::WHITE, on));
     }
     resp.on_hover_text(if busy { "Arrêter (Échap)" } else { "Envoyer (Entrée)" }).clicked()
 }
@@ -231,9 +429,9 @@ mod tests {
 
     #[test]
     fn labels_show_engine_mode_and_effort() {
-        assert_eq!(engine_label(Engine::Kimi, AuthMode::ApiKey), "⚡ Kimi K3.1 Pro · clé API");
-        assert_eq!(engine_label(Engine::Claude, AuthMode::Subscription), "⚡ Claude · abonnement");
-        assert_eq!(engine_label(Engine::Kimi, AuthMode::Subscription), "⚡ Kimi K3.1 Pro · clé API");
+        assert_eq!(engine_short(Engine::DeepSeek, AuthMode::ApiKey), "DeepSeek · clé API");
+        assert_eq!(engine_short(Engine::Claude, AuthMode::Subscription), "Claude · abonnement");
+        assert_eq!(engine_short(Engine::DeepSeek, AuthMode::Subscription), "DeepSeek · clé API");
         assert_eq!(effort_label(Effort::Off), "effort Off (sans réflexion)");
         assert_eq!(effort_label(Effort::Max), "effort Max");
     }

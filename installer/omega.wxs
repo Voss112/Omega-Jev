@@ -4,8 +4,9 @@
   <Product Id="*" Name="Omega" Language="1036" Codepage="1252" Version="$(var.Version)" Manufacturer="Omega"
            UpgradeCode="a1435599-7eaa-489f-a2b0-3d12151c2b58">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited"
-             Description="Omega - agent IA local et anonyme (Jev + Kimi K3.1 Pro / DeepSeek V4.1 Flash)" />
-    <MajorUpgrade DowngradeErrorMessage="Une version plus récente d'Omega est déjà installée." />
+             Description="Omega - agent IA local et anonyme (Jev + Claude / DeepSeek)" />
+    <!-- Same-version rebuilds replace the installed copy instead of adding a second entry. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="Une version plus récente d'Omega est déjà installée." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <Icon Id="OmegaIcon" SourceFile="$(var.Root)\assets\omega.ico" />

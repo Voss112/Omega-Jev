@@ -66,14 +66,18 @@ pub async fn execute(dir: &Path, cmd: &str, timeout_secs: usize) -> Result<Strin
 /// Runs a prepared command (no shell involved unless the caller built one): capped, timed, compressed.
 pub async fn run_command(mut command: process::Command, dir: &Path, timeout_secs: usize) -> Result<String> {
     command.current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = command.spawn().context("cannot start process")?;
     let (stdout, stderr) = (child.stdout.take().context("stdout")?, child.stderr.take().context("stderr")?);
-    let run = async move {
+    let mut tree = Tree { child, done: false };
+    let run = async {
         let (out, err) = tokio::join!(capped(stdout), capped(stderr));
-        let status = child.wait().await?;
+        let status = tree.child.wait().await?;
+        tree.done = true;
         anyhow::Ok((out?, err?, status))
     };
-    // On timeout the future (and the child, kill_on_drop) is dropped → process killed.
+    // On timeout (or when the turn is stopped) the tree is dropped: the process and its children are killed.
     let (out, err, status) = tokio::time::timeout(Duration::from_secs(timeout_secs as u64), run)
         .await
         .map_err(|_| anyhow::anyhow!("timeout after {timeout_secs}s (process killed)"))??;
@@ -85,6 +89,25 @@ pub async fn run_command(mut command: process::Command, dir: &Path, timeout_secs
     }
     let code = status.code().map_or_else(|| "killed".to_owned(), |c| c.to_string());
     Ok(format!("exit {code}\n{}", compress::shell(&text)))
+}
+
+/// A running child that takes its whole process tree down when dropped unfinished: `kill_on_drop` alone only
+/// reaches the shell, leaving `cargo`, a dev server or a watcher running after a timeout or a stop.
+struct Tree {
+    child: process::Child,
+    done: bool,
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        let Some(pid) = self.child.id().filter(|_| !self.done) else { return };
+        // Runs before the field drop (`kill_on_drop`), while the parent still links its children.
+        #[cfg(windows)]
+        let kill = process::blocking("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).output();
+        #[cfg(not(windows))]
+        let kill = process::blocking("kill").args(["-KILL", "--", &format!("-{pid}")]).output();
+        let _ = kill;
+    }
 }
 
 /// Reads at most OUTPUT_CAP bytes; dropping the pipe afterwards stops a runaway writer.

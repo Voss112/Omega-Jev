@@ -76,19 +76,4 @@ impl ToolKind {
     pub fn parse(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.name() == name)
     }
-
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::ListDir => "🗁",
-            Self::ReadFile | Self::Outline | Self::FindSymbol => "📄",
-            Self::Grep | Self::DocsSearch => "🔍",
-            Self::BlastRadius => "🕸",
-            Self::EditFile | Self::ReplaceSymbol | Self::WriteFile => "✏",
-            Self::Shell => "▶",
-            Self::SecurityScan => "🛡",
-            Self::WebSearch | Self::WebFetch => "🌐",
-            Self::CliAnything => "🧩",
-            Self::AuditKit => "📋",
-        }
-    }
 }

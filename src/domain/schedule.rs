@@ -4,7 +4,10 @@ use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::engine::{Effort, Engine};
+use super::{
+    engine::{Effort, Engine},
+    models,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
@@ -15,30 +18,43 @@ pub struct Job {
     #[serde(default)]
     pub daily: bool,
     pub engine: Engine,
+    /// Exact model id chosen at scheduling time; empty means "whatever the settings say when it fires".
+    #[serde(default)]
+    pub model: String,
     pub effort: Effort,
 }
 
 impl Job {
-    pub fn new(prompt: String, at: DateTime<Utc>, daily: bool, engine: Engine, effort: Effort) -> Self {
-        Self { id: Uuid::new_v4(), prompt, at, daily, engine, effort }
+    pub fn new(prompt: String, at: DateTime<Utc>, daily: bool, engine: Engine, model: String, effort: Effort) -> Self {
+        Self { id: Uuid::new_v4(), prompt, at, daily, engine, model, effort }
     }
 
     pub fn due(&self, now: DateTime<Utc>) -> bool {
         self.at <= now
     }
 
-    /// Daily jobs move to their next occurrence; one-shot jobs are removed by the caller.
+    /// Daily jobs move to their next occurrence at the same local time, across DST changes;
+    /// one-shot jobs are removed by the caller.
     pub fn advance(&mut self, now: DateTime<Utc>) {
+        let local = self.at.with_timezone(&Local);
+        let (mut day, wall) = (local.date_naive(), local.time());
         while self.at <= now {
-            self.at += Duration::days(1);
+            let Some(next) = day.succ_opt() else { break };
+            day = next;
+            // A wall time skipped by the spring-forward jump fires one hour later that day.
+            self.at = instant(day, wall)
+                .or_else(|| instant(day, wall + Duration::hours(1)))
+                .unwrap_or_else(|| self.at + Duration::days(1));
         }
     }
 
-    /// `24/10 08:30 · chaque jour · Claude · effort Max`
+    /// `24/10 08:30 · chaque jour · Claude Opus 5.5 · effort Max`
     pub fn label(&self) -> String {
         let when = self.at.with_timezone(&Local).format("%d/%m %H:%M");
         let repeat = if self.daily { "chaque jour" } else { "une fois" };
-        format!("{when} · {repeat} · {} · effort {}", self.engine.label(), self.effort.label())
+        let who =
+            if self.model.trim().is_empty() { self.engine.label().to_owned() } else { models::name(self.engine, &self.model) };
+        format!("{when} · {repeat} · {who} · effort {}", self.effort.label())
     }
 }
 
@@ -46,12 +62,12 @@ impl Job {
 pub fn parse_when(date: &str, time: &str) -> Result<DateTime<Utc>, String> {
     let date = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").map_err(|_| "date attendue : AAAA-MM-JJ".to_owned())?;
     let time = NaiveTime::parse_from_str(time.trim(), "%H:%M").map_err(|_| "heure attendue : HH:MM".to_owned())?;
-    let naive = date.and_time(time);
-    Local
-        .from_local_datetime(&naive)
-        .earliest()
-        .map(|dt| dt.with_timezone(&Utc))
-        .ok_or_else(|| "heure locale inexistante (changement d'heure)".to_owned())
+    instant(date, time).ok_or_else(|| "heure locale inexistante (changement d'heure)".to_owned())
+}
+
+/// Local wall-clock time → UTC instant; the earlier one when the time repeats (fall back).
+fn instant(date: NaiveDate, time: NaiveTime) -> Option<DateTime<Utc>> {
+    Local.from_local_datetime(&date.and_time(time)).earliest().map(|dt| dt.with_timezone(&Utc))
 }
 
 #[cfg(test)]
@@ -64,7 +80,7 @@ mod tests {
 
     #[test]
     fn a_job_fires_once_its_instant_is_reached() {
-        let job = Job::new("audit".into(), at(24, 8), false, Engine::Claude, Effort::Max);
+        let job = Job::new("audit".into(), at(24, 8), false, Engine::Claude, String::new(), Effort::Max);
         assert!(!job.due(at(24, 7)));
         assert!(job.due(at(24, 8)));
         assert!(job.due(at(25, 1)));
@@ -72,11 +88,23 @@ mod tests {
 
     #[test]
     fn a_daily_job_moves_to_the_next_day() {
-        let mut job = Job::new("veille".into(), at(24, 8), true, Engine::Gemini, Effort::Medium);
-        job.advance(at(24, 9));
-        assert_eq!(job.at, at(25, 8));
-        job.advance(at(27, 12));
-        assert_eq!(job.at, at(28, 8));
+        let first = at(24, 8);
+        let mut job = Job::new("veille".into(), first, true, Engine::Claude, String::new(), Effort::Medium);
+        for now in [at(24, 9), at(27, 12)] {
+            job.advance(now);
+            assert!(job.at > now && job.at - now <= Duration::hours(25), "{}", job.at);
+            assert_eq!(job.at.with_timezone(&Local).time(), first.with_timezone(&Local).time());
+        }
+    }
+
+    #[test]
+    fn a_daily_job_keeps_its_local_time_across_a_dst_change() {
+        // 25/10/2026 is a DST change in Europe: whatever the local zone, the wall-clock time must not drift.
+        let first = parse_when("2026-10-24", "08:30").unwrap();
+        let mut job = Job::new("veille".into(), first, true, Engine::Claude, String::new(), Effort::Medium);
+        job.advance(first + Duration::days(3) - Duration::hours(2));
+        let local = job.at.with_timezone(&Local);
+        assert_eq!(local.format("%Y-%m-%d %H:%M").to_string(), "2026-10-27 08:30");
     }
 
     #[test]
@@ -88,8 +116,10 @@ mod tests {
 
     #[test]
     fn label_reads_like_a_sentence() {
-        let job = Job::new("x".into(), at(24, 8), true, Engine::Claude, Effort::Max);
+        let job = Job::new("x".into(), at(24, 8), true, Engine::Claude, "claude-opus-5-5".into(), Effort::Max);
         let label = job.label();
-        assert!(label.contains("chaque jour") && label.contains("Claude") && label.contains("effort Max"), "{label}");
+        assert!(label.contains("chaque jour") && label.contains("Claude Opus 5.5") && label.contains("effort Max"), "{label}");
+        let legacy = Job::new("x".into(), at(24, 8), false, Engine::Claude, String::new(), Effort::Max);
+        assert!(legacy.label().contains("Claude"), "un job sans modèle nomme le moteur");
     }
 }

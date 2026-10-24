@@ -1,10 +1,11 @@
 //! OAuth modal: open the provider page, validate on the site, come back.
 
-use eframe::egui::{self, Align, CornerRadius, Frame, Id, Layout, Margin, Modal, RichText, TextEdit, Ui};
+use eframe::egui::{self, Align, FontId, Id, Layout, Margin, Modal, RichText, Sense, TextEdit, Ui, vec2};
 
 use super::{
-    App,
-    theme::{self, CARD, FAINT, MUTED, TEXT},
+    App, fx,
+    icons::{self, Icon},
+    theme::{ACCENT_HI, EDGE, FAINT, MUTED, SOFT},
     widgets,
 };
 use crate::{app::login::Login, domain::auth::Provider};
@@ -12,42 +13,60 @@ use crate::{app::login::Login, domain::auth::Provider};
 pub fn show(app: &mut App, ctx: &egui::Context) {
     let Some(mut login) = app.login.take() else { return };
     let (mut submit, mut cancel, mut open_page) = (false, false, false);
-    let modal = Modal::new(Id::unique("login"))
-        .frame(Frame::new().fill(CARD).corner_radius(CornerRadius::same(18)).inner_margin(Margin::same(24)))
-        .show(ctx, |ui| {
-            ui.set_width(580.0);
-            ui.label(RichText::new(format!("Se connecter avec {}", login.provider.label())).font(theme::bold(20.0)).color(TEXT));
-            ui.add_space(8.0);
-            instructions(ui, &login);
+    let modal = Modal::new(Id::unique("login")).frame(widgets::modal_frame()).backdrop_color(widgets::BACKDROP).show(ctx, |ui| {
+        ui.set_width(580.0);
+        let title = format!("Se connecter avec {}", login.provider.label());
+        cancel |=
+            widgets::modal_header(ui, Icon::Key, &title, "Validation sur le site du fournisseur, rien ne transite ailleurs.");
+        ui.add_space(14.0);
+        instructions(ui, &login);
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            if widgets::primary_icon(ui, Some(Icon::Globe), "Ouvrir la page", 170.0).clicked() {
+                open_page = true;
+            }
+            ui.add_space(4.0);
+            if widgets::pill(ui, Some(Icon::Copy), "Copier le lien", SOFT, false).clicked() {
+                ui.ctx().copy_text(login.url.clone());
+            }
+        });
+        if login.provider == Provider::Claude {
+            ui.add_space(14.0);
+            ui.label(RichText::new("Collez le code affiché après validation").size(12.5).color(MUTED));
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.add(
+                    TextEdit::singleline(&mut login.paste)
+                        .hint_text("code#state")
+                        .margin(Margin::symmetric(10, 7))
+                        .desired_width(ui.available_width() - 140.0),
+                );
+                submit = widgets::primary_icon(ui, Some(Icon::Check), "Valider", 130.0).clicked()
+                    && !login.paste.trim().is_empty()
+                    && !login.submitting;
+            });
+        }
+        if !login.status.is_empty() {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.button("🌐 Ouvrir la page").clicked() {
-                    open_page = true;
+                let (rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                if login.submitting {
+                    fx::spinner(ui.painter(), rect.center(), 6.0, 2.0, fx::now(ui.ctx()));
+                } else {
+                    icons::paint(ui.painter(), rect, Icon::Sparkle, ACCENT_HI);
                 }
-                if ui.button("⧉ Copier le lien").clicked() {
-                    ui.ctx().copy_text(login.url.clone());
-                }
-            });
-            if login.provider == Provider::Claude {
-                ui.add_space(10.0);
-                ui.label(RichText::new("Collez le code affiché après validation").size(12.5).color(MUTED));
-                ui.add(TextEdit::singleline(&mut login.paste).hint_text("code#state").desired_width(f32::INFINITY));
-                ui.add_space(6.0);
-                submit = widgets::primary(ui, "Valider", 130.0).clicked() && !login.paste.trim().is_empty() && !login.submitting;
-            }
-            if !login.status.is_empty() {
-                ui.add_space(10.0);
                 ui.label(RichText::new(login.status.clone()).size(12.0).color(FAINT));
-            }
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if widgets::ghost(ui, "Annuler").clicked() {
-                        cancel = true;
-                    }
-                });
+            });
+        }
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if widgets::ghost(ui, "Annuler").clicked() {
+                    cancel = true;
+                }
             });
         });
+    });
     if modal.should_close() {
         cancel = true;
     }
@@ -68,18 +87,32 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
 }
 
 fn instructions(ui: &mut Ui, login: &Login) {
-    let text = match (login.provider, login.listening) {
-        (Provider::Claude, _) => {
-            "1. Ouvrez la page et connectez-vous avec votre compte Claude (Pro ou Max). \
-             2. Après validation, la page affiche un code : copiez-le et collez-le ci-dessous."
-        }
-        (Provider::Gemini, true) => {
-            "1. Ouvrez la page et choisissez le compte Google de votre abonnement. \
-             2. Après validation, Omega reçoit le retour du navigateur automatiquement."
-        }
-        (Provider::Gemini, false) => {
-            "Ouvrez la page, validez, puis collez ici le code affiché si le navigateur ne revient pas tout seul."
-        }
+    let steps: &[&str] = match login.provider {
+        Provider::Claude => &[
+            "Ouvrez la page et connectez-vous avec votre compte Claude (Pro ou Max).",
+            "Après validation, la page affiche un code : copiez-le et collez-le ci-dessous.",
+        ],
     };
-    ui.label(RichText::new(text).size(12.5).color(MUTED));
+    widgets::card(ui, EDGE, |ui| {
+        ui.set_width(ui.available_width());
+        for (i, step) in steps.iter().enumerate() {
+            if i > 0 {
+                ui.add_space(6.0);
+            }
+            ui.horizontal_top(|ui| {
+                let (badge, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+                let p = ui.painter();
+                fx::gradient_rect(p, badge, 11.0, super::theme::ACCENT, super::theme::INDIGO);
+                p.text(
+                    badge.center(),
+                    egui::Align2::CENTER_CENTER,
+                    (i + 1).to_string(),
+                    FontId::proportional(11.5),
+                    egui::Color32::WHITE,
+                );
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(RichText::new(*step).size(12.5).color(SOFT)).wrap());
+            });
+        }
+    });
 }

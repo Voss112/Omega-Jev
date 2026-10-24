@@ -132,7 +132,8 @@ async fn token(http: &Client, body: &Value) -> Result<Cred> {
         // One retry is worth it when the server asks for a short wait; a long Retry-After is reported as-is.
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt == 0 && retry_after.is_none_or(|wait| wait <= MAX_WAIT) {
             attempt = 1;
-            let wait = retry_after.unwrap_or(std::time::Duration::from_secs(3)).clamp(std::time::Duration::from_secs(1), MAX_WAIT);
+            let wait =
+                retry_after.unwrap_or(std::time::Duration::from_secs(3)).clamp(std::time::Duration::from_secs(1), MAX_WAIT);
             tokio::time::sleep(wait).await;
             continue;
         }
@@ -152,7 +153,6 @@ async fn token(http: &Client, body: &Value) -> Result<Cred> {
             refresh: v["refresh_token"].as_str().unwrap_or_default().to_owned(),
             expires_at: chrono::Utc::now().timestamp() + i64::try_from(expires_in).unwrap_or(3600),
             account: v["subscriptionType"].as_str().unwrap_or("claude").to_owned(),
-            project: String::new(),
         });
     }
 }
@@ -181,7 +181,6 @@ pub fn import_cli(dir: &std::path::Path) -> Option<Cred> {
         refresh: oauth["refreshToken"].as_str().unwrap_or_default().to_owned(),
         expires_at: oauth["expiresAt"].as_i64().map_or(0, |ms| ms / 1000),
         account: oauth["subscriptionType"].as_str().unwrap_or("claude-code").to_owned(),
-        project: String::new(),
     })
 }
 
@@ -233,7 +232,11 @@ mod tests {
         let p = pkce::Pkce::new();
         let url = authorize_url(&p);
         assert!(url.starts_with("https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e"));
-        for needle in ["response_type=code", "code_challenge_method=S256", "redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback"] {
+        for needle in [
+            "response_type=code",
+            "code_challenge_method=S256",
+            "redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback",
+        ] {
             assert!(url.contains(needle), "manque {needle}");
         }
         assert!(url.contains(&format!("code_challenge={}", p.challenge)));

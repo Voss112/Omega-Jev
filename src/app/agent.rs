@@ -1,17 +1,18 @@
-//! One user turn: compaction → Jev routes → Kimi streams → tools run → loop until a final answer.
+//! One user turn: compaction → Jev routes → the engine streams → tools run → loop until a final answer.
 
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Result, bail, ensure};
 use futures_util::future::join_all;
+use uuid::Uuid;
 
-use super::{Emitter, Env, Event, compact, context, router};
+use super::{Emitter, Env, Event, compact, context, prompts, router, savings};
 use crate::{
     domain::{
         chat::{Conversation, Message, ToolCall, Usage},
         tool::ToolKind,
     },
-    infra::llm::Delta,
+    infra::llm::{self, Delta},
     tools::{self, ToolCtx, ToolOutput, checkpoint::Checkpoint, diagnostics},
 };
 
@@ -26,52 +27,89 @@ pub async fn run(mut conv: Conversation, env: Arc<Env>, emit: Emitter) {
 }
 
 async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64) -> Result<()> {
-    ensure!(env.llm.configured(), "{} non configuré — connectez l'abonnement ou saisissez une clé dans ⚙ Paramètres.", env.llm.engine.label());
+    ensure!(
+        env.llm.configured(),
+        "{} non configuré — connectez l'abonnement ou saisissez une clé dans ⚙ Paramètres.",
+        env.llm.engine.label()
+    );
     // Compaction is an optimization: on failure the turn simply runs on the full history.
     let _ = compact::maybe(conv, env, emit).await;
     let root = env.workspace();
     let query = conv.messages.last().map(|m| m.content.clone()).unwrap_or_default();
 
     let (route, jev_tokens) = router::route(env, conv, &query).await;
-    let loaded: Vec<&str> = conv.messages.iter().rev().skip(1).filter_map(|m| m.route.as_ref()?.playbook.as_deref()).collect();
+    // A playbook summarized away by compaction is no longer on the wire: it must be sent again in full.
+    let visible = conv.summary.as_ref().map_or(0, |s| s.upto).min(conv.messages.len());
+    let loaded: Vec<&str> =
+        conv.messages[visible..].iter().rev().skip(1).filter_map(|m| m.route.as_ref()?.playbook.as_deref()).collect();
     let preamble = context::preamble(&route, &root, conv.user_turns() == 1, &loaded);
     conv.toolset.extend(route.tools());
     if let Some(m) = conv.last_user_mut() {
         m.preamble.clone_from(&preamble);
         m.route = Some(route.clone());
     }
-    emit.send(Event::Routed { conv: conv.id, route: route.clone(), preamble, toolset: conv.toolset.clone() });
+    // Frozen for the whole turn: the tool loop then only appends, which Claude's signed reasoning requires.
+    let system = prompts::system(&env.settings, &root);
+    // A new system prompt or tool set voids the reasoning signed before it: drop it as a leading run, once.
+    let prefix = savings::prefix(&system, &conv.toolset);
+    if prefix != conv.prefix {
+        conv.prefix = prefix;
+        conv.thinking_from = conv.messages.len().saturating_sub(1);
+    }
+    emit.send(Event::Routed {
+        conv: conv.id,
+        route: route.clone(),
+        preamble,
+        toolset: conv.toolset.clone(),
+        thinking_from: conv.thinking_from,
+        prefix,
+    });
     if jev_tokens > 0 {
         emit.send(Event::Usage { conv: conv.id, usage: Usage::jev(jev_tokens) });
     }
 
     let ctx = ToolCtx { env, root, emit, conv: conv.id, turn };
     for _ in 0..env.settings.max_steps.max(1) {
-        let body = context::request(conv, env);
-        let id = conv.id;
-        let done = env
-            .llm
-            .stream(&body, |delta| {
-                let (text, reasoning) = match delta {
-                    Delta::Text(t) => (t, false),
-                    Delta::Reasoning(t) => (t, true),
-                };
-                emit.send(Event::Delta { conv: id, text: text.to_owned(), reasoning });
-            })
-            .await?;
+        let body = context::request(conv, env, &system, true);
+        let done = match complete(env, emit, conv.id, &body).await {
+            // Reasoning bound to an older state of the conversation: one retry without the reasoning blocks.
+            Err(e) if llm::thinking_rejected(&e) => {
+                // Later steps of this turn keep only the reasoning they produce themselves.
+                conv.thinking_from = conv.messages.len();
+                complete(env, emit, conv.id, &context::request(conv, env, &system, false)).await?
+            }
+            done => done?,
+        };
+        let sample = savings::measure(conv, env, &body, &done.usage);
+        conv.savings.record(&sample);
+        emit.send(Event::Measured { conv: conv.id, sample, thinking_from: conv.thinking_from });
         // Prompt size drives compaction; estimated (~4 bytes/token) if the server sent no usage.
         conv.context = if done.usage.prompt > 0 { done.usage.prompt } else { body.to_string().len() as u64 / 4 };
-        emit.send(Event::Usage { conv: id, usage: done.usage });
-        emit.send(Event::Context { conv: id, tokens: conv.context });
+        emit.send(Event::Usage { conv: conv.id, usage: done.usage });
+        emit.send(Event::Context { conv: conv.id, tokens: conv.context });
 
         let calls = done.tool_calls.clone();
-        commit(conv, emit, Message::assistant(done.content, done.reasoning, done.tool_calls));
+        let answer = Message { parts: done.parts, ..Message::assistant(done.content, done.reasoning, done.tool_calls) };
+        commit(conv, emit, answer.by(env.llm.engine, &env.llm.model));
         if calls.is_empty() {
             return Ok(());
         }
         run_tools(conv, &ctx, &calls).await;
     }
     bail!("Limite de {} étapes atteinte — envoyez « continue » pour poursuivre.", env.settings.max_steps)
+}
+
+/// One streamed model call, deltas forwarded to the UI.
+async fn complete(env: &Env, emit: &Emitter, conv: Uuid, body: &serde_json::Value) -> Result<llm::Completion> {
+    env.llm
+        .stream(body, |delta| {
+            let (text, reasoning) = match delta {
+                Delta::Text(t) => (t, false),
+                Delta::Reasoning(t) => (t, true),
+            };
+            emit.send(Event::Delta { conv, text: text.to_owned(), reasoning });
+        })
+        .await
 }
 
 /// Read-only calls run concurrently; writes and shell stay sequential and ordered.
@@ -113,7 +151,7 @@ fn groups(calls: &[ToolCall]) -> Vec<&[ToolCall]> {
 }
 
 fn commit_tool(conv: &mut Conversation, emit: &Emitter, call: &ToolCall, output: ToolOutput) {
-    let msg = Message { diff: output.diff, ..Message::tool(call.id.clone(), output.text) };
+    let msg = Message { diff: output.diff, rtk: output.rtk, ..Message::tool(call.id.clone(), output.text) };
     commit(conv, emit, msg);
 }
 

@@ -1,4 +1,4 @@
-//! Static system prompt. Byte-identical across turns → Kimi prefix-cache hits.
+//! Static system prompt. Byte-identical across turns → provider prefix-cache hits.
 
 use std::{fmt::Write as _, path::Path};
 

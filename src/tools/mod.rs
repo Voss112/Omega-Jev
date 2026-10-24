@@ -45,22 +45,27 @@ pub struct ToolOutput {
     pub diff: Option<String>,
     /// File written by this call (drives diagnostics).
     pub changed: Option<PathBuf>,
+    /// Bytes the RTK compressor removed before the model saw `text`.
+    pub rtk: u64,
 }
 
 impl From<String> for ToolOutput {
     fn from(text: String) -> Self {
-        Self { text, diff: None, changed: None }
+        Self { text, diff: None, changed: None, rtk: 0 }
     }
 }
 
 /// Never fails: errors become tool output so the model can recover.
 pub async fn run(ctx: &ToolCtx<'_>, call: &ToolCall) -> ToolOutput {
     let args: Value = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
-    let result = match ToolKind::parse(&call.name) {
-        Some(kind) => exec(ctx, kind, Args(&args)).await,
-        None => Err(anyhow!("unknown tool `{}`", call.name)),
-    };
-    result.unwrap_or_else(|e| format!("ERROR: {e:#}").into())
+    let (result, rtk) = compress::measured(async {
+        match ToolKind::parse(&call.name) {
+            Some(kind) => exec(ctx, kind, Args(&args)).await,
+            None => Err(anyhow!("unknown tool `{}`", call.name)),
+        }
+    })
+    .await;
+    ToolOutput { rtk, ..result.unwrap_or_else(|e| format!("ERROR: {e:#}").into()) }
 }
 
 async fn exec(ctx: &ToolCtx<'_>, kind: ToolKind, a: Args<'_>) -> Result<ToolOutput> {

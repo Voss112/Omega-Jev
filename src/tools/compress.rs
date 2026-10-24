@@ -1,6 +1,6 @@
 //! RTK-style output compression + TOON encoding. Pure functions, in-process.
 
-use std::sync::LazyLock;
+use std::{cell::Cell, future::Future, sync::LazyLock};
 
 use anyhow::{Result, ensure};
 use regex::Regex;
@@ -41,7 +41,28 @@ const NOISE: &[&str] = &[
 
 const MAX_CHARS: usize = 8_000;
 
+tokio::task_local! {
+    /// Bytes removed by `shell` inside the current tool call (economy ledger).
+    static SAVED: Cell<u64>;
+}
+
+/// Runs one tool call and reports how many bytes the compressor kept out of its output.
+pub async fn measured<F: Future>(call: F) -> (F::Output, u64) {
+    SAVED
+        .scope(Cell::new(0), async {
+            let out = call.await;
+            (out, SAVED.with(Cell::get))
+        })
+        .await
+}
+
 pub fn shell(raw: &str) -> String {
+    let out = filter(raw);
+    let _ = SAVED.try_with(|s| s.set(s.get() + raw.len().saturating_sub(out.len()) as u64));
+    out
+}
+
+fn filter(raw: &str) -> String {
     let clean = ANSI.replace_all(raw, "");
     let lines: Vec<&str> = clean
         .lines()

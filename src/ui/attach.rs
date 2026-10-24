@@ -7,7 +7,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use eframe::egui::{Context, TextureHandle, TextureOptions, Ui, vec2};
+use eframe::egui::{ColorImage, Context, Event, Key, TextureHandle, TextureOptions, Ui, vec2};
 use image::{DynamicImage, ImageFormat};
 
 use crate::domain::chat::Image;
@@ -18,6 +18,9 @@ const MAX_SIDE: u32 = 1568;
 const MAX_BYTES: usize = 2_500_000;
 /// Refuse to load a dropped/picked file bigger than this before decoding it.
 const MAX_INPUT: u64 = 25_000_000;
+/// Decoder caps: a 20 KB PNG can declare a 100 000 × 100 000 canvas and exhaust memory.
+const MAX_SIDE_INPUT: u32 = 12_000;
+const MAX_ALLOC: u64 = 256 << 20;
 
 pub fn from_path(path: &Path) -> Result<Image, String> {
     let size = std::fs::metadata(path).map_err(|e| format!("{} : {e}", path.display()))?.len();
@@ -30,16 +33,60 @@ pub fn from_path(path: &Path) -> Result<Image, String> {
 
 /// Decodes, downscales to 1568 px and re-encodes; PNG for crisp text, JPEG when PNG stays too heavy.
 pub fn from_bytes(bytes: &[u8]) -> Result<Image, String> {
-    let img = image::load_from_memory(bytes).map_err(|e| format!("image illisible : {e}"))?;
-    encode(downscale(img))
+    encode(downscale(decode(bytes)?))
+}
+
+/// Bounded decode: strict width/height caps plus an allocation budget.
+fn decode(bytes: &[u8]) -> Result<DynamicImage, String> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| format!("image illisible : {e}"))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SIDE_INPUT);
+    limits.max_image_height = Some(MAX_SIDE_INPUT);
+    limits.max_alloc = Some(MAX_ALLOC);
+    reader.limits(limits);
+    reader.decode().map_err(|e| format!("image illisible : {e}"))
 }
 
 /// Clipboard image (Win+Shift+S screenshot ⇒ Ctrl+V here).
-pub fn from_clipboard() -> Option<Image> {
-    let mut clipboard = arboard::Clipboard::new().ok()?;
-    let data = clipboard.get_image().ok()?;
-    let img = image::RgbaImage::from_raw(data.width as u32, data.height as u32, data.bytes.into_owned())?;
-    encode(downscale(DynamicImage::ImageRgba8(img))).ok()
+/// Images pasted with Ctrl+V this frame.
+pub fn pasted(ctx: &Context) -> Vec<Result<Image, String>> {
+    let (shots, files) = ctx.input(|i| {
+        let shots: Vec<_> = i
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PasteImage(img) => Some(from_color(img)),
+                _ => None,
+            })
+            .collect();
+        // egui swallows Ctrl+V press; its release still arrives. Explorer-copied files carry no text nor bitmap.
+        let files = shots.is_empty() && i.modifiers.command && i.key_released(Key::V);
+        (shots, files)
+    });
+    if files { clipboard_files() } else { shots }
+}
+
+/// Clipboard bitmap (Win+Shift+S, Snipping Tool, browser "copy image") already decoded by egui.
+fn from_color(img: &ColorImage) -> Result<Image, String> {
+    let [w, h] = img.size;
+    let rgba = img.pixels.iter().flat_map(|p| p.to_srgba_unmultiplied()).collect();
+    let buf = image::RgbaImage::from_raw(w as u32, h as u32, rgba).ok_or("image du presse-papiers invalide")?;
+    encode(downscale(DynamicImage::ImageRgba8(buf)))
+}
+
+/// Image files copied in Explorer (Ctrl+C on a .png).
+fn clipboard_files() -> Vec<Result<Image, String>> {
+    let Ok(mut clipboard) = arboard::Clipboard::new() else { return Vec::new() };
+    clipboard
+        .get()
+        .file_list()
+        .unwrap_or_default()
+        .iter()
+        .filter(|p| is_image(p))
+        .map(|p| from_path(p))
+        .collect()
 }
 
 /// PNG keeps text crisp; JPEG only when the PNG would blow past the provider limit.
@@ -101,7 +148,7 @@ pub fn texture(ctx: &Context, cache: &mut HashMap<u64, TextureHandle>, img: &Ima
         return Some(handle.clone());
     }
     let bytes = STANDARD.decode(&img.data).ok()?;
-    let decoded = image::load_from_memory(&bytes).ok()?;
+    let decoded = decode(&bytes).ok()?;
     let rgba = decoded.to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
     let color = eframe::egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
@@ -118,19 +165,39 @@ pub fn key(img: &Image) -> u64 {
 }
 
 /// One thumbnail; returns `true` when its ✕ was clicked.
-pub fn thumb(ui: &mut Ui, ctx: &Context, cache: &mut HashMap<u64, TextureHandle>, img: &Image, size: f32, removable: bool) -> bool {
+pub fn thumb(
+    ui: &mut Ui,
+    ctx: &Context,
+    cache: &mut HashMap<u64, TextureHandle>,
+    img: &Image,
+    size: f32,
+    removable: bool,
+) -> bool {
     let mut remove = false;
-    ui.vertical(|ui| {
-        if let Some(tex) = texture(ctx, cache, img) {
-            let aspect = tex.size_vec2().y / tex.size_vec2().x.max(1.0);
-            ui.add(eframe::egui::Image::new(&tex).fit_to_exact_size(vec2(size, size * aspect)).corner_radius(6.0));
-        } else {
-            ui.label(eframe::egui::RichText::new("image illisible").size(10.5).color(super::theme::RED));
+    if let Some(tex) = texture(ctx, cache, img) {
+        let aspect = tex.size_vec2().y / tex.size_vec2().x.max(1.0);
+        let resp = ui.add(eframe::egui::Image::new(&tex).fit_to_exact_size(vec2(size, size * aspect)).corner_radius(8.0));
+        ui.painter().rect_stroke(
+            resp.rect,
+            8.0,
+            eframe::egui::Stroke::new(1.0, super::theme::EDGE_HI),
+            eframe::egui::StrokeKind::Inside,
+        );
+        if removable {
+            let button = eframe::egui::Rect::from_center_size(resp.rect.right_top() + vec2(-11.0, 11.0), vec2(20.0, 20.0));
+            let click = ui.interact(button, resp.id.with("remove"), eframe::egui::Sense::click()).on_hover_text("Retirer");
+            let p = ui.painter();
+            p.circle_filled(
+                button.center(),
+                10.0,
+                eframe::egui::Color32::from_black_alpha(if click.hovered() { 230 } else { 170 }),
+            );
+            super::icons::at(p, button.center(), 11.0, super::icons::Icon::Close, eframe::egui::Color32::WHITE);
+            remove = click.clicked();
         }
-        if removable && ui.small_button("✕").clicked() {
-            remove = true;
-        }
-    });
+    } else {
+        ui.label(eframe::egui::RichText::new("image illisible").size(10.5).color(super::theme::RED));
+    }
     remove
 }
 
@@ -168,10 +235,15 @@ mod tests {
     }
 
     #[test]
+    fn an_oversized_canvas_is_refused_before_decoding() {
+        assert!(from_bytes(&png(MAX_SIDE_INPUT + 1, 1)).is_err(), "largeur au-delà de la limite");
+        assert!(from_bytes(&png(1, MAX_SIDE_INPUT + 1)).is_err(), "hauteur au-delà de la limite");
+    }
+
+    #[test]
     fn keys_differ_per_payload() {
         let a = from_bytes(&png(2, 2)).unwrap();
         let b = from_bytes(&png(3, 2)).unwrap();
         assert_ne!(key(&a), key(&b));
     }
 }
-

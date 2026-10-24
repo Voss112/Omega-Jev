@@ -11,11 +11,10 @@ use serde_json::Value;
 
 use crate::{
     domain::auth::{Cred, Provider},
-    infra::{paths, secret},
+    infra::{paths, secret, store},
 };
 
 pub mod claude;
-pub mod gemini;
 pub mod pkce;
 
 /// A token is refreshed this many seconds before it expires, so a request never races expiry.
@@ -36,17 +35,8 @@ pub fn stale(cred: &Cred, now: i64) -> bool {
 pub fn write_to(dir: &Path, provider: Provider, cred: &Cred) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("création {}", dir.display()))?;
     let json = serde_json::to_string(cred)?;
-    let sealed = secret::seal(&json);
-    let path = dir.join(format!("{}.json", provider.id()));
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, sealed.as_bytes())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-    }
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    let sealed = secret::seal(&json)?;
+    store::write_private(&dir.join(format!("{}.json", provider.id())), sealed.as_bytes())
 }
 
 /// Missing, unreadable or undecryptable file = no credentials.
@@ -55,13 +45,18 @@ pub fn read_from(dir: &Path, provider: Provider) -> Option<Cred> {
     serde_json::from_str(&secret::open(raw.trim())).ok()
 }
 
-/// Shared handle on one provider's credentials: reads, refreshes and persists them.
+/// Serialises refreshes per provider across every handle (chat, health checks, usage, model list):
+/// providers rotate refresh tokens, so two parallel refreshes with the same token burn the session.
+fn gate(provider: Provider) -> &'static tokio::sync::Mutex<()> {
+    static GATES: [tokio::sync::Mutex<()>; Provider::ALL.len()] = [tokio::sync::Mutex::const_new(())];
+    &GATES[provider as usize]
+}
+
+/// Handle on one provider's credentials: reads, refreshes and persists them.
 pub struct Auth {
     provider: Provider,
     dir: PathBuf,
     state: Mutex<Cred>,
-    /// Serialises refreshes: providers rotate refresh tokens, a concurrent pair would burn one.
-    gate: tokio::sync::Mutex<()>,
 }
 
 impl Auth {
@@ -69,7 +64,7 @@ impl Auth {
     pub fn load(provider: Provider) -> Option<Arc<Self>> {
         let dir = paths::creds();
         let cred = read_from(&dir, provider)?;
-        Some(Arc::new(Self { provider, dir, state: Mutex::new(cred), gate: tokio::sync::Mutex::new(()) }))
+        Some(Arc::new(Self { provider, dir, state: Mutex::new(cred) }))
     }
 
     /// In-memory only (fresh login before the file is written).
@@ -81,23 +76,12 @@ impl Auth {
         self.lock().account.clone()
     }
 
-    pub fn project(&self) -> String {
-        self.lock().project.clone()
-    }
-
     pub fn cred(&self) -> Cred {
         self.lock().clone()
     }
 
     pub fn replace(&self, cred: Cred) {
         *self.lock() = cred;
-    }
-
-    /// Persists `cred` in memory and on disk.
-    pub fn save(&self, cred: Cred) -> Result<()> {
-        write_to(&self.dir, self.provider, &cred)?;
-        *self.lock() = cred;
-        Ok(())
     }
 
     pub fn needs_refresh(&self, now: i64) -> bool {
@@ -110,21 +94,30 @@ impl Auth {
         if !self.needs_refresh(now) {
             return Ok(self.access());
         }
-        // One refresher at a time; the others see the renewed token when they get the gate.
-        let _gate = self.gate.lock().await;
+        // One refresher at a time; the others pick up the renewed token from disk when they get the gate.
+        let _gate = gate(self.provider).lock().await;
         let now = chrono::Utc::now().timestamp();
+        let current = self.cred();
+        if let Some(disk) = read_from(&self.dir, self.provider)
+            && disk.access != current.access
+            && !stale(&disk, now)
+        {
+            self.replace(disk);
+            return Ok(self.access());
+        }
         if !self.needs_refresh(now) {
             return Ok(self.access());
         }
-        let current = self.cred();
         if current.refresh.trim().is_empty() {
             bail!("{} : session expirée — reconnectez-vous dans ⚙ Paramètres.", self.provider.label());
         }
         let renewed = refresh(http, self.provider, &current).await?;
         let account = if renewed.account.is_empty() { current.account } else { renewed.account };
-        let project = if renewed.project.is_empty() { current.project } else { renewed.project };
-        self.save(Cred { account, project, ..renewed })?;
-        Ok(self.access())
+        let cred = Cred { account, ..renewed };
+        // Memory first: the previous refresh token is spent, it must never be used again even if the disk write fails.
+        self.replace(cred.clone());
+        write_to(&self.dir, self.provider, &cred)?;
+        Ok(cred.access)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Cred> {
@@ -136,7 +129,6 @@ impl Auth {
 pub async fn refresh(http: &Client, provider: Provider, cred: &Cred) -> Result<Cred> {
     match provider {
         Provider::Claude => claude::refresh(http, cred).await,
-        Provider::Gemini => gemini::refresh(http, cred).await,
     }
 }
 
@@ -145,7 +137,8 @@ pub fn oauth_error(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| {
-            let detail = v["error_description"].as_str().or_else(|| v["error"]["message"].as_str()).or_else(|| v["error"].as_str());
+            let detail =
+                v["error_description"].as_str().or_else(|| v["error"]["message"].as_str()).or_else(|| v["error"].as_str());
             let code = v["error"].as_str();
             Some(match (code, detail) {
                 (Some(c), Some(d)) if d != c => format!("{c}: {d}"),
@@ -162,7 +155,7 @@ mod tests {
     use crate::domain::auth::{Cred, Provider};
 
     fn cred(expires_at: i64) -> Cred {
-        Cred { access: "a".into(), refresh: "r".into(), expires_at, account: String::new(), project: String::new() }
+        Cred { access: "a".into(), refresh: "r".into(), expires_at, account: String::new() }
     }
 
     #[test]
@@ -176,13 +169,27 @@ mod tests {
     fn cred_round_trips_through_the_sealed_file() {
         let dir = std::env::temp_dir().join("omega-creds-roundtrip");
         let _ = std::fs::remove_dir_all(&dir);
-        let cred = Cred { access: "at-123".into(), refresh: "rt-456".into(), expires_at: 42, account: "me@x".into(), project: "p".into() };
+        let cred = Cred { access: "at-123".into(), refresh: "rt-456".into(), expires_at: 42, account: "me@x".into() };
         super::write_to(&dir, Provider::Claude, &cred).unwrap();
         let raw = std::fs::read_to_string(dir.join("claude.json")).unwrap();
         assert!(!raw.contains("at-123") && !raw.contains("rt-456"), "jeton en clair sur disque");
         let back = super::read_from(&dir, Provider::Claude).unwrap();
-        assert_eq!((back.refresh.as_str(), back.project.as_str()), ("rt-456", "p"));
-        assert!(super::read_from(&dir, Provider::Gemini).is_none());
+        assert_eq!((back.refresh.as_str(), back.account.as_str()), ("rt-456", "me@x"));
+    }
+
+    #[tokio::test]
+    async fn a_handle_adopts_tokens_another_handle_already_renewed() {
+        let dir = std::env::temp_dir().join("omega-creds-shared");
+        let _ = std::fs::remove_dir_all(&dir);
+        let now = chrono::Utc::now().timestamp();
+        let spent = Cred { access: "a1".into(), refresh: "r1".into(), expires_at: now - 10, ..Cred::default() };
+        let renewed = Cred { access: "a2".into(), refresh: "r2".into(), expires_at: now + 3_600, ..Cred::default() };
+        super::write_to(&dir, Provider::Claude, &renewed).unwrap();
+        let stale = super::Auth { provider: Provider::Claude, dir, state: std::sync::Mutex::new(spent) };
+        // No network: the renewed pair on disk wins instead of a second refresh with the spent token.
+        let token = stale.fresh(&crate::infra::http::client("").unwrap()).await.unwrap();
+        assert_eq!(token, "a2");
+        assert_eq!(stale.cred().refresh, "r2");
     }
 
     #[test]

@@ -51,7 +51,7 @@ pub async fn route(env: &Env, conv: &Conversation, query: &str) -> (Route, u64) 
     (local(query), 0)
 }
 
-async fn ask_jev(jev: &Jev, conv: &Conversation, query: &str) -> Result<(Route, u64)> {
+pub(super) async fn ask_jev(jev: &Jev, conv: &Conversation, query: &str) -> Result<(Route, u64)> {
     let previous = conv.messages.iter().rev().filter(|m| m.role == Role::User).nth(1).map(|m| clip(&m.content, 300));
     let state = json!({ "request": clip(query, 1500), "previous_request": previous, "turn": conv.user_turns() });
     let choice =
@@ -176,7 +176,6 @@ const APP_WORDS: &[&str] = &[
     "cli-anything",
     "cli anything",
     "logiciel",
-    "application",
 ];
 
 pub fn local(query: &str) -> Route {

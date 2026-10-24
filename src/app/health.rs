@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::json;
 
-use super::{Env, prompts};
+use super::{Env, prompts, savings};
 use crate::{
     domain::{engine::Engine, playbook},
     infra::{jev::Question, llm::Llm},
@@ -28,17 +28,16 @@ fn entry(group: &'static str, name: &'static str, result: Result<String>) -> Hea
 }
 
 pub async fn check(env: &Env) -> Vec<Health> {
-    let (kimi, deepseek, claude, gemini, jev, ddg, sh, apps) = tokio::join!(
-        engine(env, Engine::Kimi),
+    let (deepseek, claude, jev, ddg, sh, apps) = tokio::join!(
         engine(env, Engine::DeepSeek),
         engine(env, Engine::Claude),
-        engine(env, Engine::Gemini),
         jev(env),
         web::probe(&env.http),
         shell::probe(),
         clihub::probe(&env.http)
     );
-    let local = tokio::task::spawn_blocking(|| {
+    let web = env.web.clone();
+    let local = tokio::task::spawn_blocking(move || {
         [
             code::self_test(),
             graph::self_test(),
@@ -46,10 +45,12 @@ pub async fn check(env: &Env) -> Vec<Health> {
             compress::self_test(),
             security::self_test(),
             guard::self_test(),
+            savings::prefix_self_test(&web),
+            savings::lazy_self_test(),
         ]
     })
     .await;
-    let [ts, gr, rg, rtk, sec, grd] = match local {
+    let [ts, gr, rg, rtk, sec, grd, prefix, lazy] = match local {
         Ok(results) => results,
         Err(e) => std::array::from_fn(|_| Err(anyhow::anyhow!("{e}"))),
     };
@@ -57,10 +58,8 @@ pub async fn check(env: &Env) -> Vec<Health> {
     let pages = env.web.len();
     let routing = if env.jev.is_some() { "Jev (System One)" } else { "heuristique locale" };
     vec![
-        entry("Moteurs IA", Engine::Kimi.label(), kimi),
         entry("Moteurs IA", Engine::DeepSeek.label(), deepseek),
         entry("Moteurs IA", Engine::Claude.label(), claude),
-        entry("Moteurs IA", Engine::Gemini.label(), gemini),
         entry("Moteurs IA", "Jev System One", jev),
         entry("Code", "Tree-sitter AST", ts),
         entry("Code", "Graphe d'impact", gr),
@@ -68,8 +67,8 @@ pub async fn check(env: &Env) -> Vec<Health> {
         entry("Code", "Shell", sh),
         entry("Économie tokens", "Compresseur RTK", rtk),
         entry("Économie tokens", "Encodeur TOON", toon),
-        entry("Économie tokens", "Lazy tools", Ok(format!("routage {routing}"))),
-        entry("Économie tokens", "Cache préfixe KV", Ok("préfixe statique, historique immuable".into())),
+        entry("Économie tokens", "Lazy tools", lazy.map(|d| format!("routage {routing} · {d}"))),
+        entry("Économie tokens", "Cache préfixe KV", prefix),
         entry("Économie tokens", "Style de sortie", Ok(env.settings.style.label().into())),
         entry("Skills", "Superpowers (obra)", playbooks()),
         entry("Skills", RULES_CHECK, project_rules(env)),
@@ -111,9 +110,9 @@ async fn engine(env: &Env, engine: Engine) -> Result<String> {
     let llm = Llm::new(env.http.clone(), &env.settings, engine);
     anyhow::ensure!(llm.configured(), "aucun identifiant (clé API ou abonnement)");
     llm.ping().await?;
-    let active = if engine == env.settings.engine { " · actif" } else { "" };
+    // Engine and effort switches do not rerun the checks: they are shown live in the « Moteur actif » card.
     let mode = if llm.subscription() { "abonnement" } else { "clé API" };
-    Ok(format!("{} · effort {} · {mode}{active}", llm.model, llm.effort.label()))
+    Ok(format!("{} · {mode}", llm.model))
 }
 
 async fn jev(env: &Env) -> Result<String> {

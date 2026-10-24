@@ -1,12 +1,14 @@
-//! Use cases: routing (Jev), context assembly, agent loop (Kimi K3.1 Pro), health.
+//! Use cases: routing (Jev), context assembly, agent loop (DeepSeek or Claude), health.
 
 pub mod agent;
+pub mod bench;
 pub mod compact;
 pub mod context;
 pub mod health;
 pub mod login;
 pub mod prompts;
 pub mod router;
+pub mod savings;
 
 use std::{
     collections::BTreeSet,
@@ -23,7 +25,10 @@ use crate::{
     domain::{
         auth::{Cred, Provider, Window},
         chat::{Message, Summary, Usage},
+        engine::Engine,
+        models::Choice,
         route::Route,
+        savings::Sample,
         settings::Settings,
         tool::ToolKind,
     },
@@ -80,6 +85,9 @@ pub enum Event {
         route: Route,
         preamble: String,
         toolset: BTreeSet<ToolKind>,
+        /// Claude reasoning replay boundary and the prefix fingerprint it was checked against.
+        thinking_from: usize,
+        prefix: u64,
     },
     Delta {
         conv: Uuid,
@@ -93,6 +101,12 @@ pub enum Event {
     Usage {
         conv: Uuid,
         usage: Usage,
+    },
+    /// One request measured for the economy ledger.
+    Measured {
+        conv: Uuid,
+        sample: Sample,
+        thinking_from: usize,
     },
     /// Prompt tokens of the latest request (drives auto-compaction).
     Context {
@@ -123,7 +137,14 @@ pub enum Event {
         provider: Provider,
         windows: Vec<Window>,
     },
+    /// Model ids the account may call, for the pickers.
+    Models {
+        engine: Engine,
+        result: Result<Vec<Choice>, String>,
+    },
     Health(Vec<health::Health>),
+    /// Live token-economy benchmark results.
+    Bench(Vec<health::Health>),
     Vpn(VpnInfo),
 }
 

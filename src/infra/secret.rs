@@ -4,12 +4,22 @@ use base64::Engine as _;
 
 const PREFIX: &str = "dpapi:";
 
-/// Encrypts for storage. Empty stays empty.
-pub fn seal(plain: &str) -> String {
+/// Encrypts for storage. Empty stays empty; a DPAPI failure is an error, never a plaintext write.
+pub fn seal(plain: &str) -> anyhow::Result<String> {
     if plain.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
-    platform::protect(plain.as_bytes()).map_or_else(|| plain.to_owned(), |blob| format!("{PREFIX}{}", b64().encode(blob)))
+    #[cfg(windows)]
+    {
+        platform::protect(plain.as_bytes())
+            .map(|blob| format!("{PREFIX}{}", b64().encode(blob)))
+            .ok_or_else(|| anyhow::anyhow!("chiffrement DPAPI impossible : secret non enregistré (jamais en clair)"))
+    }
+    #[cfg(not(windows))]
+    {
+        // No DPAPI off Windows: `write_private` stores the file owner-only (0600).
+        Ok(plain.to_owned())
+    }
 }
 
 /// Decrypts a stored value; plain legacy values pass through unchanged.
@@ -80,7 +90,7 @@ mod platform {
 mod tests {
     #[test]
     fn dpapi_round_trip() {
-        let sealed = super::seal("sk-test-123");
+        let sealed = super::seal("sk-test-123").unwrap();
         assert!(sealed.starts_with(super::PREFIX) && !sealed.contains("sk-test"));
         assert_eq!(super::open(&sealed), "sk-test-123");
         assert_eq!(super::open("plain"), "plain");

@@ -1,15 +1,8 @@
-//! OAuth 2.0 PKCE (S256) helpers and the loopback redirect listener.
+//! OAuth 2.0 PKCE (S256) helpers.
 
-use std::time::Duration;
-
-use anyhow::{Context, Result, bail};
 use ring::{
     digest,
     rand::{SecureRandom, SystemRandom},
-};
-use tokio::{
-    io::AsyncReadExt,
-    net::{TcpListener, TcpStream},
 };
 
 pub struct Pkce {
@@ -61,90 +54,9 @@ fn random(n: usize) -> Vec<u8> {
     buf
 }
 
-/// Listens on `http://127.0.0.1:{port}/oauth2callback`, checks `state`, returns the code.
-pub async fn await_code(port: u16, state: &str, timeout: Duration) -> Result<String> {
-    let listener = TcpListener::bind(("127.0.0.1", port)).await.with_context(|| format!("écoute sur le port {port}"))?;
-    tokio::time::timeout(timeout, serve(listener, state)).await.map_err(|_| anyhow::anyhow!("délai de connexion dépassé"))?
-}
-
-/// Reserves a free loopback port by binding and immediately releasing it.
-async fn serve(listener: TcpListener, state: &str) -> Result<String> {
-    loop {
-        let (mut socket, _) = listener.accept().await?;
-        let mut buf = vec![0u8; 8192];
-        let Ok(n) = socket.read(&mut buf).await else { continue };
-        if n == 0 {
-            continue;
-        }
-        let head = String::from_utf8_lossy(&buf[..n]);
-        let Some(query) = head.split_whitespace().nth(1).and_then(|target| target.split_once('?')).map(|(_, q)| q) else {
-            continue;
-        };
-        let params = parse_query(query);
-        let state_ok = params.iter().any(|(k, v)| k == "state" && v == state);
-        let body = if state_ok { "Connexion reussie. Revenez a Omega." } else { "Etat invalide. Recommencez." };
-        respond(&mut socket, body).await;
-        if !state_ok {
-            bail!("state OAuth invalide");
-        }
-        if let Some((_, err)) = params.iter().find(|(k, _)| k == "error") {
-            bail!("OAuth refusé : {err}");
-        }
-        let Some((_, code)) = params.iter().find(|(k, _)| k == "code") else {
-            bail!("réponse OAuth sans code");
-        };
-        return Ok(code.clone());
-    }
-}
-
-async fn respond(socket: &mut TcpStream, body: &str) {
-    use tokio::io::AsyncWriteExt as _;
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
-        body.len()
-    );
-    let _ = socket.write_all(response.as_bytes()).await;
-    let _ = socket.flush().await;
-}
-
-fn parse_query(query: &str) -> Vec<(String, String)> {
-    query
-        .split('&')
-        .filter_map(|pair| {
-            let (k, v) = pair.split_once('=')?;
-            Some((percent_decode(k), percent_decode(v)))
-        })
-        .collect()
-}
-
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
-                out.push(hex.unwrap_or(b'%'));
-                i += 3;
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncWriteExt as _;
 
     #[test]
     fn rfc7636_vector() {
@@ -154,38 +66,5 @@ mod tests {
         assert_eq!(p.verifier.len(), 43);
         assert_eq!(p.challenge, challenge(&p.verifier));
         assert_eq!(p.state.len(), 64);
-    }
-
-    async fn get(port: u16, query: &str) -> bool {
-        for _ in 0..100 {
-            if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)).await {
-                let req = format!("GET /oauth2callback?{query} HTTP/1.1\r\nHost: localhost\r\n\r\n");
-                return stream.write_all(req.as_bytes()).await.is_ok();
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        false
-    }
-
-    #[tokio::test]
-    async fn loopback_captures_the_code_once() {
-        let pkce = Pkce::new();
-        let port = local_port();
-        let state = pkce.state.clone();
-        let server = tokio::spawn(async move { await_code(port, &state, Duration::from_secs(5)).await });
-        assert!(get(port, &format!("state={}&code=abc123", pkce.state)).await);
-        assert_eq!(server.await.unwrap().unwrap(), "abc123");
-    }
-
-    #[tokio::test]
-    async fn loopback_rejects_a_foreign_state() {
-        let port = local_port();
-        let server = tokio::spawn(async move { await_code(port, "good", Duration::from_secs(5)).await });
-        assert!(get(port, "state=bad&code=abc123").await);
-        assert!(server.await.unwrap().is_err());
-    }
-
-    fn local_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
     }
 }

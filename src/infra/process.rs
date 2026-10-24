@@ -1,12 +1,20 @@
 use std::ffi::OsStr;
 
-pub use tokio::process::Command;
+pub use tokio::process::{Child, Command};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Secrets never reach child processes.
-const SECRET_VARS: &[&str] = &["MOONSHOT_API_KEY", "TYPESAFE_API_KEY", "DEEPSEEK_API_KEY"];
+const SECRET_VARS: &[&str] = &[
+    "MOONSHOT_API_KEY",
+    "TYPESAFE_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+];
 
 /// Program without console window flash (Windows GUI) and killed when dropped.
 pub fn command(program: impl AsRef<OsStr>) -> Command {

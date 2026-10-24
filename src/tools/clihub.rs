@@ -110,10 +110,7 @@ async fn find(ctx: &ToolCtx<'_>, name: &str) -> Result<Cli> {
 
 pub async fn search(ctx: &ToolCtx<'_>, query: &str) -> Result<String> {
     let clis = registry(&ctx.env.http).await?;
-    let docs: Vec<String> = clis
-        .iter()
-        .map(|c| format!("{} {} {} {}", c.name, c.display_name, c.category.as_deref().unwrap_or(""), c.description))
-        .collect();
+    let docs = documents(&clis);
     let refs: Vec<&str> = docs.iter().map(String::as_str).collect();
     let q = query.to_lowercase();
     let mut picked: Vec<usize> = (0..clis.len()).filter(|&i| !q.is_empty() && clis[i].name.to_lowercase().contains(&q)).collect();
@@ -138,6 +135,30 @@ pub async fn search(ctx: &ToolCtx<'_>, query: &str) -> Result<String> {
         })
         .collect();
     Ok(toon("clis", &["name", "category", "installed", "requires", "description"], &rows))
+}
+
+fn documents(clis: &[Cli]) -> Vec<String> {
+    clis.iter()
+        .map(|c| format!("{} {} {} {}", c.name, c.display_name, c.category.as_deref().unwrap_or(""), c.description))
+        .collect()
+}
+
+/// Benchmark: the registry loads, a plain-language query finds GIMP and its install is of a safe shape.
+pub async fn self_check(http: &Client) -> Result<String> {
+    let clis = registry(http).await?;
+    let docs = documents(&clis);
+    let refs: Vec<&str> = docs.iter().map(String::as_str).collect();
+    let found = bm25("raster image editing photo", &refs, 12).into_iter().any(|(i, _)| clis[i].name == "gimp");
+    ensure!(found, "la recherche « raster image editing » ne trouve pas GIMP");
+    let gimp = clis.iter().find(|c| c.name == "gimp").context("gimp absent du registre")?;
+    ensure!(gimp.install_cmd.as_deref().and_then(install_plan).is_some(), "installation GIMP non planifiable sans shell");
+    let exe = gimp.exe();
+    let installed = tokio::task::spawn_blocking(move || find_exe(&exe).is_some()).await?;
+    Ok(format!(
+        "{} CLIs · « raster image editing » → gimp · install pip sûre{}",
+        clis.len(),
+        if installed { " · gimp installé" } else { "" }
+    ))
 }
 
 pub async fn info(ctx: &ToolCtx<'_>, name: &str) -> Result<String> {
@@ -242,7 +263,11 @@ pub async fn run(ctx: &ToolCtx<'_>, name: &str, mut args: Vec<String>, timeout_s
 }
 
 /// Executable lookup in PATH plus Python user/global script dirs (where `pip --user` puts entry points).
+/// The name comes from a third-party registry: a path (`../x`, `C:\x`) is never looked up.
 pub fn find_exe(name: &str) -> Option<PathBuf> {
+    if name.is_empty() || name.contains(['/', '\\', ':']) || name.contains("..") {
+        return None;
+    }
     let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ".bat"] } else { &[""] };
     let path_dirs: Vec<PathBuf> = env::var_os("PATH").map(|p| env::split_paths(&p).collect()).unwrap_or_default();
     path_dirs
@@ -302,6 +327,13 @@ mod tests {
         assert!(install_plan(&format!("pip install {HARNESS_GIT}../evil")).is_none());
         assert!(install_plan("cd sketch/agent-harness && npm install").is_none());
         assert!(install_plan("brew install foo").is_none());
+    }
+
+    #[test]
+    fn a_registry_entry_point_cannot_name_a_path() {
+        for name in ["../../evil", r"C:\Windows\System32\cmd", "sub/tool", ""] {
+            assert!(find_exe(name).is_none(), "{name}");
+        }
     }
 
     /// Live check against GitHub: `cargo test -- --ignored clihub`.

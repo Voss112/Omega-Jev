@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use anyhow::Result;
 use serde_json::json;
 
-use super::{Emitter, Env, Event};
+use super::{Emitter, Env, Event, savings};
 use crate::{
     domain::chat::{Conversation, Role, Summary},
     tools::compress::clip,
@@ -35,11 +35,16 @@ pub async fn maybe(conv: &mut Conversation, env: &Env, emit: &Emitter) -> Result
     let body = env.llm.body(&messages, None);
     let done = env.llm.stream(&body, |_| {}).await?;
     emit.send(Event::Usage { conv: conv.id, usage: done.usage });
+    let sample = savings::plain(env, &body, &done.usage);
+    conv.savings.record(&sample);
+    emit.send(Event::Measured { conv: conv.id, sample, thinking_from: conv.thinking_from });
     // An empty summary would silently erase the history: keep the full transcript instead.
     anyhow::ensure!(!done.content.trim().is_empty(), "empty summary");
     let summary = Summary { upto, text: done.content };
     conv.summary = Some(summary.clone());
     conv.context = 0;
+    // Kept answers were signed against the full history: their reasoning cannot follow the summary.
+    conv.thinking_from = conv.messages.len().saturating_sub(1);
     emit.send(Event::Compacted { conv: conv.id, summary });
     Ok(())
 }

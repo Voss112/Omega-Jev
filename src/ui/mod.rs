@@ -15,7 +15,9 @@ mod login;
 mod markdown;
 mod panel;
 mod pace;
+mod plans;
 mod savings;
+mod scale;
 mod schedule;
 mod settings;
 mod sidebar;
@@ -59,7 +61,7 @@ pub fn run() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Omega")
             .with_inner_size([1400.0, 880.0])
-            .with_min_inner_size([1180.0, 700.0])
+            .with_min_inner_size([960.0, 600.0])
             .with_decorations(false)
             .with_icon(Arc::new(theme::icon())),
         centered: true,
@@ -119,6 +121,7 @@ pub struct App {
     plan_usage: HashMap<Provider, (Vec<Window>, Instant)>,
     /// Connected account per subscription, read once (decrypting credentials every frame is wasteful).
     accounts: HashMap<Provider, String>,
+    scaler: scale::Scaler,
     show_panel: bool,
     focus_composer: bool,
     notice: Option<(String, Instant)>,
@@ -192,6 +195,7 @@ impl App {
             token_draft: String::new(),
             plan_usage: HashMap::new(),
             accounts: HashMap::new(),
+            scaler: scale::Scaler::default(),
             show_panel: true,
             focus_composer: true,
             notice: None,
@@ -333,6 +337,8 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.pump();
         let ctx = ui.ctx().clone();
+        self.scaler.update(&ctx);
+        let narrow = ctx.content_rect().width() < scale::NARROW_W;
         self.pump_dictation(&ctx);
         if self.tex_owner != self.current {
             self.evict_textures();
@@ -365,7 +371,8 @@ impl eframe::App for App {
                 glass(ui);
                 sidebar::show(self, ui);
             });
-        let mut show_files = self.files.show;
+        // Narrow window: side columns fold away without forgetting the user's choice.
+        let mut show_files = self.files.show && !narrow;
         Panel::left("files")
             .exact_size(FILES_W)
             .resizable(false)
@@ -375,8 +382,10 @@ impl eframe::App for App {
                 glass(ui);
                 files::panel(self, ui);
             });
-        self.files.show = show_files;
-        let mut show_tools = self.show_panel;
+        if !narrow {
+            self.files.show = show_files;
+        }
+        let mut show_tools = self.show_panel && !narrow;
         Panel::right("tools")
             .exact_size(TOOLS_W)
             .resizable(false)
@@ -386,7 +395,9 @@ impl eframe::App for App {
                 glass(ui);
                 panel::show(self, ui);
             });
-        self.show_panel = show_tools;
+        if !narrow {
+            self.show_panel = show_tools;
+        }
         Panel::bottom("composer")
             .resizable(false)
             .show_separator_line(false)

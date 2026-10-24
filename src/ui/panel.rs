@@ -11,7 +11,7 @@ use super::{
 use crate::{
     app::health,
     domain::{
-        auth::{AuthMode, Provider},
+        auth::AuthMode,
         models,
     },
 };
@@ -39,7 +39,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         engine(app, ui);
         network(app, ui);
         economy(app, ui);
-        subscription(app, ui);
+        super::plans::show(app, ui, heading);
         verdict(app, ui);
         ui.add_space(16.0);
     });
@@ -244,55 +244,6 @@ fn economy(app: &App, ui: &mut Ui) {
         p.text(rect.right_center(), eframe::egui::Align2::RIGHT_CENTER, ratio, FontId::monospace(11.5), CYAN);
         ui.add_space(2.0);
         widgets::bar(ui, u.cache_ratio(), CYAN, 6.0);
-    });
-}
-
-fn subscription(app: &App, ui: &mut Ui) {
-    if !app.settings.engine.subscription_capable() {
-        return;
-    }
-    heading(ui, "Abonnement");
-    widgets::card(ui, EDGE, |ui| {
-        ui.set_width(ui.available_width());
-        let connected = app.env.llm.subscription();
-        let account = app.env.llm.account();
-        let label = if connected {
-            let suffix = if account.is_empty() { String::new() } else { format!(" · {account}") };
-            format!("{} connecté{suffix}", app.settings.engine.label())
-        } else {
-            format!("{} : non connecté (Paramètres)", app.settings.engine.label())
-        };
-        ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-            icons::paint(
-                ui.painter(),
-                rect,
-                if connected { Icon::Check } else { Icon::Key },
-                if connected { GREEN } else { MUTED },
-            );
-            widgets::truncated(ui, &label, FontId::proportional(12.5), if connected { GREEN } else { MUTED });
-        });
-        let usage = Provider::of(app.settings.engine).and_then(|p| app.plan_usage.get(&p));
-        if let Some((windows, at)) = usage {
-            ui.add_space(6.0);
-            for w in windows {
-                let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
-                let p = ui.painter();
-                p.text(rect.left_center(), eframe::egui::Align2::LEFT_CENTER, &w.label, FontId::proportional(11.5), MUTED);
-                let value = format!("{:.0} %", w.fraction * 100.0);
-                p.text(rect.right_center(), eframe::egui::Align2::RIGHT_CENTER, value, FontId::monospace(11.0), TEXT);
-                let color = if w.fraction > 0.85 {
-                    RED
-                } else if w.fraction > 0.6 {
-                    AMBER
-                } else {
-                    CYAN
-                };
-                widgets::bar(ui, w.fraction, color, 5.0);
-                ui.add_space(4.0);
-            }
-            ui.label(widgets::text(format!("relevé il y a {} s", at.elapsed().as_secs()), 10.5, FAINT));
-        }
     });
 }
 

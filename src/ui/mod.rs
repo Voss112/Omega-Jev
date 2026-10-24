@@ -127,6 +127,8 @@ pub struct App {
     tex: HashMap<u64, egui::TextureHandle>,
     /// Conversation the textures were last pruned for.
     tex_owner: Option<Uuid>,
+    /// Last connection warm-up (throttled while typing).
+    warmed: Option<Instant>,
     /// Live model list per provider, as returned by the account.
     catalog: HashMap<Engine, Vec<Choice>>,
     catalog_error: HashMap<Engine, String>,
@@ -183,6 +185,7 @@ impl App {
             shots: Vec::new(),
             tex: HashMap::new(),
             tex_owner: None,
+            warmed: None,
             catalog: HashMap::new(),
             catalog_error: HashMap::new(),
             model_input: None,
@@ -348,6 +351,7 @@ impl eframe::App for App {
             .show_separator_line(false)
             .frame(Frame::new().inner_margin(Margin { left: 22, right: 22, top: 4, bottom: 10 }))
             .show(ui, |ui| composer::show(self, ui));
+        self.warm_up();
         let central = CentralPanel::default()
             .frame(Frame::new().inner_margin(Margin::symmetric(22, 0)))
             .show(ui, |ui| {

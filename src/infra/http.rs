@@ -24,7 +24,11 @@ pub fn client(proxy: &str) -> Result<Client> {
         .connect_timeout(Duration::from_secs(15))
         // A stalled stream (no byte for 5 min, not even a keep-alive) fails instead of hanging the turn forever.
         .read_timeout(Duration::from_secs(300))
-        .pool_idle_timeout(Duration::from_secs(90))
+        // Warm connections between turns: no TCP + TLS handshake (~100-300 ms) before each model call.
+        .pool_idle_timeout(Duration::from_secs(300))
+        .tcp_keepalive(Duration::from_secs(60))
+        .http2_keep_alive_interval(Duration::from_secs(30))
+        .http2_keep_alive_while_idle(true)
         .dns_resolver(PublicOnly)
         .redirect(redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 8 {
@@ -104,6 +108,13 @@ impl Resolve for PublicOnly {
             }
             Ok(Box::new(addrs.into_iter()) as Addrs)
         })
+    }
+}
+
+/// Opens (or refreshes) a pooled TLS connection to `url`; the answer is irrelevant and nothing secret is sent.
+pub async fn warm(http: &Client, url: &str) {
+    if url.starts_with("https://") {
+        let _ = http.head(url).timeout(Duration::from_secs(5)).send().await;
     }
 }
 

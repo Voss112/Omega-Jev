@@ -35,25 +35,46 @@ const CONTINUATIONS: &[&str] = &[
     "encore",
 ];
 
+/// What routing needs from the conversation, copied out so the turn can compact the history meanwhile.
+pub struct Input {
+    pub query: String,
+    previous: Option<String>,
+    turns: usize,
+    last_route: Option<Route>,
+}
+
+impl Input {
+    pub fn of(conv: &Conversation) -> Self {
+        Self {
+            query: conv.messages.last().map(|m| m.content.clone()).unwrap_or_default(),
+            previous: conv.messages.iter().rev().filter(|m| m.role == Role::User).nth(1).map(|m| clip(&m.content, 300)),
+            turns: conv.user_turns(),
+            last_route: conv.messages.iter().rev().skip(1).find_map(|m| m.route.clone()),
+        }
+    }
+
+    /// The previous verdict, when the query is a bare "continue".
+    fn follow_up(&self) -> Option<&Route> {
+        let q = self.query.trim().trim_end_matches(['.', '!', ' ']).to_lowercase();
+        CONTINUATIONS.contains(&q.as_str()).then_some(self.last_route.as_ref()).flatten()
+    }
+}
+
 /// Returns the route and the Jev tokens spent. A bare follow-up ("continue") keeps the previous verdict (no Jev call).
-pub async fn route(env: &Env, conv: &Conversation, query: &str) -> (Route, u64) {
-    let follow_up = query.trim().trim_end_matches(['.', '!', ' ']).to_lowercase();
-    if CONTINUATIONS.contains(&follow_up.as_str())
-        && let Some(previous) = conv.messages.iter().rev().skip(1).find_map(|m| m.route.clone())
-    {
-        return (previous, 0);
+pub async fn route(env: &Env, input: &Input) -> (Route, u64) {
+    if let Some(previous) = input.follow_up() {
+        return (previous.clone(), 0);
     }
     if let Some(jev) = &env.jev
-        && let Ok(found) = ask_jev(jev, conv, query).await
+        && let Ok(found) = ask_jev(jev, input).await
     {
         return found;
     }
-    (local(query), 0)
+    (local(&input.query), 0)
 }
 
-pub(super) async fn ask_jev(jev: &Jev, conv: &Conversation, query: &str) -> Result<(Route, u64)> {
-    let previous = conv.messages.iter().rev().filter(|m| m.role == Role::User).nth(1).map(|m| clip(&m.content, 300));
-    let state = json!({ "request": clip(query, 1500), "previous_request": previous, "turn": conv.user_turns() });
+pub(super) async fn ask_jev(jev: &Jev, input: &Input) -> Result<(Route, u64)> {
+    let state = json!({ "request": clip(&input.query, 1500), "previous_request": input.previous, "turn": input.turns });
     let choice =
         |instructions: &str, criteria: Vec<(String, String)>| Question::Choice { instructions: instructions.into(), criteria };
     let questions = vec![
@@ -200,5 +221,34 @@ pub fn local(query: &str) -> Route {
         blast: flag(skill == Skill::Refactor),
         apps: flag(APP_WORDS.iter().any(|w| q.contains(w))),
         playbook: skill.default_playbook().map(str::to_owned),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::chat::Message;
+
+    fn conversation(last: &str) -> Conversation {
+        let mut conv = Conversation::default();
+        conv.push(Message { route: Some(local("audit de sécurité du module auth")), ..Message::user("audit auth".into()) });
+        conv.push(Message::assistant("ok".into(), String::new(), Vec::new()));
+        conv.push(Message::user(last.into()));
+        conv
+    }
+
+    #[test]
+    fn a_bare_follow_up_reuses_the_previous_route() {
+        let input = Input::of(&conversation("Continue."));
+        assert_eq!(input.query, "Continue.");
+        assert_eq!(input.follow_up().map(|r| r.skill), Some(Skill::Security));
+    }
+
+    #[test]
+    fn a_new_request_is_routed_again() {
+        let input = Input::of(&conversation("explique ce code"));
+        assert!(input.follow_up().is_none());
+        assert_eq!(input.previous.as_deref(), Some("audit auth"));
+        assert_eq!(input.turns, 2);
     }
 }

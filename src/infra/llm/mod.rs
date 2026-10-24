@@ -125,6 +125,17 @@ impl Llm {
         self.auth.as_ref().map(|a| a.account()).unwrap_or_default()
     }
 
+    /// Ahead of a turn: TLS connection opened and a near-expiry subscription token refreshed off the critical path.
+    pub async fn warm(&self) {
+        if !self.configured() {
+            return;
+        }
+        if self.auth.is_some() {
+            let _ = self.authorization().await;
+        }
+        crate::infra::http::warm(&self.http, &self.base).await;
+    }
+
     /// Streaming request body in the engine's native shape.
     pub fn body(&self, messages: &[Value], tools: Option<Value>) -> Value {
         match self.wire() {

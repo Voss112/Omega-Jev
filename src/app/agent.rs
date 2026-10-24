@@ -32,12 +32,11 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
         "{} non configuré — connectez l'abonnement ou saisissez une clé dans ⚙ Paramètres.",
         env.llm.engine.label()
     );
-    // Compaction is an optimization: on failure the turn simply runs on the full history.
-    let _ = compact::maybe(conv, env, emit).await;
+    // Routing reads a snapshot, so it runs while compaction (an optimization: on failure the turn simply runs
+    // on the full history) rewrites the summary.
+    let input = router::Input::of(conv);
+    let (_, (route, jev_tokens)) = tokio::join!(compact::maybe(conv, env, emit), router::route(env, &input));
     let root = env.workspace();
-    let query = conv.messages.last().map(|m| m.content.clone()).unwrap_or_default();
-
-    let (route, jev_tokens) = router::route(env, conv, &query).await;
     // A playbook summarized away by compaction is no longer on the wire: it must be sent again in full.
     let visible = conv.summary.as_ref().map_or(0, |s| s.upto).min(conv.messages.len());
     let loaded: Vec<&str> =

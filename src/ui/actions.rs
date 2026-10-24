@@ -403,6 +403,27 @@ impl App {
             .collect();
     }
 
+    /// While the user types, the engine and Jev connections open (and a subscription token refreshes) ahead of the send.
+    pub(super) fn warm_up(&mut self) {
+        const EVERY: Duration = Duration::from_secs(240);
+        if self.draft.trim().is_empty() || self.warmed.is_some_and(|at| at.elapsed() < EVERY) {
+            return;
+        }
+        if self.settings.require_vpn && !self.vpn.as_ref().is_some_and(|v| v.active) {
+            return;
+        }
+        self.warmed = Some(std::time::Instant::now());
+        let env = self.env.clone();
+        self.spawn(async move {
+            let jev = async {
+                if let Some(jev) = &env.jev {
+                    jev.warm().await;
+                }
+            };
+            tokio::join!(env.llm.warm(), jev);
+        });
+    }
+
     pub(super) fn restart_vpn(&mut self) {
         if let Some(task) = self.vpn_task.take() {
             task.abort();

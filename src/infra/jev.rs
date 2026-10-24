@@ -75,6 +75,9 @@ pub struct Jev {
     model: String,
 }
 
+/// Jev sits on the critical path of every turn and shell command: past this, local heuristics answer instead.
+const TIMEOUT: Duration = Duration::from_secs(6);
+
 impl Jev {
     /// `None` without a key or without TLS (the key must never travel in clear).
     pub fn new(http: Client, url: &str, key: &str, model: &str) -> Option<Self> {
@@ -86,6 +89,11 @@ impl Jev {
         })
     }
 
+    /// Opens the TLS connection ahead of the first question (no key sent).
+    pub async fn warm(&self) {
+        crate::infra::http::warm(&self.http, &self.url).await;
+    }
+
     /// All questions are answered in parallel by one call.
     pub async fn ask(&self, state: Value, questions: &[(String, Question)]) -> Result<Answers> {
         let questions: Map<String, Value> = questions.iter().map(|(id, q)| (id.clone(), q.wire())).collect();
@@ -94,7 +102,7 @@ impl Jev {
             .http
             .post(&self.url)
             .bearer_auth(&self.key)
-            .timeout(Duration::from_secs(20))
+            .timeout(TIMEOUT)
             .json(&body)
             .send()
             .await

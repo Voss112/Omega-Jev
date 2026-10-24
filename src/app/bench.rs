@@ -113,7 +113,7 @@ async fn routing(env: &Env) -> (Health, u64) {
     let answers = join_all(CASES.iter().map(|c| async {
         let mut conv = Conversation::default();
         conv.push(Message::user(c.query.into()));
-        router::ask_jev(jev, &conv, c.query).await
+        router::ask_jev(jev, &router::Input::of(&conv)).await
     }))
     .await;
     let all = savings::schema_bytes(&ToolKind::ALL.into_iter().collect());

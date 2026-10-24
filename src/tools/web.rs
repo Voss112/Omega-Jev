@@ -46,29 +46,40 @@ pub async fn search(ctx: &ToolCtx<'_>, query: &str) -> Result<String> {
 }
 
 async fn ddg(http: &Client, query: &str) -> Result<Vec<Hit>> {
-    // The HTML endpoint rate-limits (403/202) by IP: any failure there falls back to the lite one.
-    let html = text(http.get("https://html.duckduckgo.com/html/").query(&[("q", query)])).await;
+    // The HTML endpoint rate-limits by IP (403, or a 202 captcha page): any failure there falls back to the lite one.
+    let html = results_page(http, "https://html.duckduckgo.com/html/", query).await;
     if let Ok(hits) = html.as_deref().map(parse_html)
         && !hits.is_empty()
     {
         return Ok(hits);
     }
-    let lite = text(http.get("https://lite.duckduckgo.com/lite/").query(&[("q", query)])).await;
+    let lite = results_page(http, "https://lite.duckduckgo.com/lite/", query).await;
     match (lite, html) {
         (Ok(page), _) => Ok(parse_lite(&page)),
         (Err(e), _) if throttled(&e) => bail!(
-            "DuckDuckGo limite temporairement cette adresse IP (403/429). Utilise docs_search pour les pages déjà en cache, \
-             réessaie dans quelques minutes ou passe par un proxy (Paramètres → Confidentialité)."
+            "DuckDuckGo limite temporairement cette adresse IP (403/429/captcha, bot challenge). Utilise docs_search pour \
+             les pages déjà en cache, réessaie dans quelques minutes ou passe par un proxy (Paramètres → Confidentialité)."
         ),
         (Err(e), Err(first)) => Err(e.context(format!("html endpoint: {first:#}"))),
         (Err(e), Ok(_)) => Err(e),
     }
 }
 
+/// A results page; the bot check (answered with a success status) is an error, not an empty result.
+async fn results_page(http: &Client, url: &str, query: &str) -> Result<String> {
+    let page = text(http.get(url).query(&[("q", query)])).await?;
+    ensure!(!challenged(&page), "bot challenge (captcha) from {url}");
+    Ok(page)
+}
+
+fn challenged(page: &str) -> bool {
+    page.contains("anomaly-modal") || page.contains("bots use DuckDuckGo")
+}
+
 /// The search engine refused this client (rate limit or bot check), as opposed to a network failure.
 fn throttled(error: &anyhow::Error) -> bool {
     let text = format!("{error:#}");
-    text.contains("403") || text.contains("429")
+    text.contains("403") || text.contains("429") || text.contains("bot challenge")
 }
 
 async fn text(req: RequestBuilder) -> Result<String> {
@@ -289,6 +300,13 @@ mod tests {
         assert!(throttled(&anyhow::anyhow!("HTTP status client error (429 Too Many Requests) for url (x)")));
         assert!(!throttled(&anyhow::anyhow!("web unreachable: dns error")));
     }
+
+    #[test]
+    fn a_bot_challenge_page_is_not_an_empty_result() {
+        let page = r#"<html><body><div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div></body></html>"#;
+        assert!(challenged(page));
+        assert!(!challenged(r#"<a class="result__a" href="https://tokio.rs/">Tokio</a>"#));
+    }
 }
 
 #[cfg(test)]
@@ -313,9 +331,14 @@ mod live {
         let emit = Emitter::new(tx, Arc::new(|| {}));
         let reads = Reads::default();
         let ctx = ToolCtx { env: &env, root: dir.clone(), emit: &emit, conv: uuid::Uuid::nil(), turn: 0, reads: &reads };
-        let found = search(&ctx, "tokio rust async runtime").await.unwrap();
-        println!("web_search: {}", clip(&found, 300));
-        assert!(found.starts_with("results["), "{found}");
+        match search(&ctx, "tokio rust async runtime").await {
+            Ok(found) => {
+                println!("web_search: {}", clip(&found, 300));
+                assert!(found.starts_with("results["), "{found}");
+            }
+            Err(e) if throttled(&e) => println!("web_search: bloqué par DuckDuckGo (IP) — {e:#}"),
+            Err(e) => panic!("web_search: {e:#}"),
+        }
         let page = fetch(&ctx, "https://docs.rs/tokio/latest/tokio/", Some("runtime")).await.unwrap();
         println!("web_fetch: {} car.", page.len());
         assert!(page.contains(UNTRUSTED) && page.to_lowercase().contains("runtime"));

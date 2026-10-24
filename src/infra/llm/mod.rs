@@ -55,6 +55,11 @@ impl Completion {
         if self.parts.is_empty() {
             self.tool_calls.retain(|c| !c.name.trim().is_empty());
         }
+        // A tool call written as text (DeepSeek's DSML markup) when no tool was offered is not an answer:
+        // the next engine of the turn takes over instead of showing the markup.
+        if self.tool_calls.is_empty() && call_markup(&self.content) {
+            bail!("{} a écrit un appel d'outil en texte au lieu de répondre.", engine.label());
+        }
         let empty = self.content.trim().is_empty() && self.tool_calls.is_empty();
         if empty && BLOCKED.contains(&self.stop.as_str()) {
             bail!("{} a interrompu la réponse ({detail}).", engine.label());
@@ -69,6 +74,13 @@ impl Completion {
         }
         Ok(self)
     }
+}
+
+/// Raw tool-call markup a model emits when it wants a tool the request did not offer.
+fn call_markup(content: &str) -> bool {
+    content.contains("DSML") && content.contains("invoke name=")
+        || content.contains("<｜tool▁calls▁begin｜>")
+        || content.trim_start().starts_with("<function_calls>")
 }
 
 /// Stop reasons that mean the provider withheld the answer.
@@ -645,6 +657,12 @@ mod tests {
         let done = Completion { tool_calls: calls, ..Completion::default() }.finish(Engine::DeepSeek).unwrap();
         assert_eq!(done.tool_calls.len(), 1, "un appel sans nom est écarté");
         assert!(done.tool_calls[0].id.starts_with("call_"), "un appel sans id en reçoit un");
+        let markup = Completion {
+            content: "<｜DSML｜function_calls> <｜DSML｜invoke name=\"list_dir\"> </｜DSML｜invoke>".into(),
+            ..Completion::default()
+        };
+        assert!(markup.finish(Engine::DeepSeek).is_err(), "balisage d'outil en texte : pas une réponse");
+        assert!(Completion { content: "La balise DSML sert à…".into(), ..Completion::default() }.finish(Engine::DeepSeek).is_ok());
         assert!(thinking_rejected(&anyhow::anyhow!("Claude 400: messages.5.content.0: Invalid `signature` in `thinking` block")));
     }
 

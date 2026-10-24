@@ -149,7 +149,8 @@ pub async fn run(bin: &Path, model: &str, effort: Effort, messages: &[Value], mu
     let dir = std::env::temp_dir().join("omega-agy");
     std::fs::create_dir_all(&dir).context("dossier de travail agy")?;
     let mut cmd = process::command(bin);
-    cmd.args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--disable-slash-commands"])
+    // stream-json input: the prompt comes from stdin only, `-p` would swallow the next flag.
+    cmd.args(["--input-format", "stream-json", "--output-format", "stream-json", "--disable-slash-commands"])
         .current_dir(&dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

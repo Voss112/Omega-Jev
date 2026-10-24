@@ -48,6 +48,11 @@ pub fn preamble(route: &Route, root: &Path, first_turn: bool, loaded: &[&str]) -
     if route.wide_impact() {
         p.push_str("\n[impact] Public API change likely: run blast_radius first, update every caller.");
     }
+    // Without this, a model that sees tools described in the system prompt writes its call markup as text.
+    if route.tools().is_empty() {
+        p.push_str("
+[no-tools] No tool is available this turn: answer directly in text, never write tool-call markup.");
+    }
     if first_turn && route.needs_code() {
         p.push_str("\n[workspace]\n");
         p.push_str(&fs::tree(root, 2, 60));

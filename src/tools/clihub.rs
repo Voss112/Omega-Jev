@@ -222,7 +222,7 @@ pub async fn install(ctx: &ToolCtx<'_>, name: &str) -> Result<String> {
     ensure!(approve(ctx, ApprovalKind::Command, display, reason).await, "install refused by the user");
     let mut command = process::command(program);
     command.args(&args);
-    let out = shell::run_command(command, &ctx.root, INSTALL_TIMEOUT).await?;
+    let out = shell::run_command(command, &ctx.root, INSTALL_TIMEOUT, "").await?;
     let status = find_exe(&cli.exe())
         .map_or_else(|| format!("{} not found on PATH yet", cli.exe()), |p| format!("ready: {}", p.display()));
     Ok(format!("{out}\n{status}"))
@@ -259,7 +259,7 @@ pub async fn run(ctx: &ToolCtx<'_>, name: &str, mut args: Vec<String>, timeout_s
     shell::gate(ctx, &format!("{} {}", cli.exe(), args.join(" "))).await?;
     let mut command = process::command(&exe);
     command.args(&args);
-    shell::run_command(command, &ctx.root, timeout_secs.clamp(1, 1800)).await
+    shell::run_command(command, &ctx.root, timeout_secs.clamp(1, 1800), "").await
 }
 
 /// Executable lookup in PATH plus Python user/global script dirs (where `pip --user` puts entry points).

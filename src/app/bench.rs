@@ -173,7 +173,7 @@ async fn lazy(llm: &Llm, spent: &mut u64) -> Result<String> {
 
 async fn rtk(llm: &Llm, spent: &mut u64) -> Result<String> {
     let raw = sample_log();
-    let packed = compress::shell(&raw);
+    let packed = compress::command("cargo test", &raw);
     let none = BTreeSet::new();
     let (a, b) = (count(llm, &raw, &none, spent).await?, count(llm, &packed, &none, spent).await?);
     ensure!(b < a, "aucune réduction ({a} → {b} tokens)");
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn local_routing_grades_and_rtk_keeps_the_failure() {
-        let packed = compress::shell(&sample_log());
+        let packed = compress::command("cargo test", &sample_log());
         assert!(packed.contains("index out of bounds") && packed.contains("test result: FAILED"));
         assert!(!packed.contains("Compiling") && !packed.contains("... ok"));
         assert!(packed.len() * 3 < sample_log().len(), "{} vs {}", packed.len(), sample_log().len());

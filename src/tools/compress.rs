@@ -56,14 +56,16 @@ pub async fn measured<F: Future>(call: F) -> (F::Output, u64) {
         .await
 }
 
-pub fn shell(raw: &str) -> String {
-    let out = filter(raw);
+/// Output of `cmd`: its dedicated RTK filter when one exists, then the generic one (noise, dedupe, head/tail, cap).
+pub fn command(cmd: &str, raw: &str) -> String {
+    let clean = ANSI.replace_all(raw, "");
+    let special = super::rtk::specialize(cmd, &clean);
+    let out = filter(special.as_deref().unwrap_or(&clean));
     let _ = SAVED.try_with(|s| s.set(s.get() + raw.len().saturating_sub(out.len()) as u64));
     out
 }
 
-fn filter(raw: &str) -> String {
-    let clean = ANSI.replace_all(raw, "");
+fn filter(clean: &str) -> String {
     let lines: Vec<&str> = clean
         .lines()
         .map(|l| l.rsplit('\r').next().unwrap_or(l).trim_end())
@@ -151,7 +153,7 @@ fn push_cell(out: &mut String, v: &str) {
 
 pub fn self_test() -> Result<String> {
     let raw = "\x1b[32m   Compiling foo v0.1\x1b[0m\ntest a ... ok\ntest b ... ok\nerror[E0308]: mismatched types\nerror[E0308]: mismatched types\n";
-    let out = shell(raw);
+    let out = command("cargo test", raw);
     ensure!(out.contains("(×2)") && !out.contains("Compiling") && !out.contains("... ok"), "filtre incorrect");
     Ok(format!("{} → {} octets sur l'échantillon", raw.len(), out.len()))
 }
@@ -169,6 +171,15 @@ pub fn toon_self_test() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_known_command_goes_through_its_filter_then_the_generic_one() {
+        let raw = "\x1b[33mwarning\x1b[0m: unused import: `a`\n\nwarning: unused import: `b`\n\nwarning: unused import: `c`\n\nwarning: unused import: `d`\n\n   Compiling x v0.1\n";
+        let out = command("cargo build", raw);
+        assert!(out.contains("… 1 more: warning: unused import"), "{out}");
+        assert!(!out.contains("Compiling") && !out.contains('\x1b'), "{out}");
+        assert_eq!(command("echo hi", "hi\n"), "hi");
+    }
 
     #[test]
     fn toon_rows_are_tab_separated_and_commas_stay_raw() {

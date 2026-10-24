@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod fs;
 pub mod graph;
 pub mod guard;
+pub mod rtk;
 pub mod schema;
 pub mod search;
 pub mod security;

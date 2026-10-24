@@ -60,11 +60,12 @@ async fn jev_verdict(ctx: &ToolCtx<'_>, cmd: &str) -> Option<String> {
 }
 
 pub async fn execute(dir: &Path, cmd: &str, timeout_secs: usize) -> Result<String> {
-    run_command(process::shell(cmd), dir, timeout_secs).await
+    run_command(process::shell(cmd), dir, timeout_secs, cmd).await
 }
 
 /// Runs a prepared command (no shell involved unless the caller built one): capped, timed, compressed.
-pub async fn run_command(mut command: process::Command, dir: &Path, timeout_secs: usize) -> Result<String> {
+/// `line` is the command as typed, which picks the RTK filter (empty = generic only).
+pub async fn run_command(mut command: process::Command, dir: &Path, timeout_secs: usize, line: &str) -> Result<String> {
     command.current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     command.process_group(0);
@@ -88,7 +89,7 @@ pub async fn run_command(mut command: process::Command, dir: &Path, timeout_secs
         text.push_str(&stderr);
     }
     let code = status.code().map_or_else(|| "killed".to_owned(), |c| c.to_string());
-    Ok(format!("exit {code}\n{}", compress::shell(&text)))
+    Ok(format!("exit {code}\n{}", compress::command(line, &text)))
 }
 
 /// A running child that takes its whole process tree down when dropped unfinished: `kill_on_drop` alone only

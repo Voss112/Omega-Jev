@@ -37,11 +37,13 @@ Linux : paquets X11/Wayland usuels requis à l'exécution (comme toute app egui)
 
 | Outil d'origine | Intégration Omega |
 |---|---|
-| lazy-tool | Jev choisit le skill ; seuls ses outils sont envoyés (ensemble monotone par discussion → cache stable) |
-| Serena | `outline`, `find_symbol`, `replace_symbol` via tree-sitter (11 langages), édition vérifiée syntaxiquement |
+| lazy-tool | Jev choisit le skill ; seuls ses outils sont envoyés (ensemble monotone par discussion → cache stable). Claude 5+ : `tools` constant (outils différés `defer_loading`) et ajouts par `tool_addition` en milieu de conversation → le cache n'est jamais invalidé ; repli automatique en mode classique si l'API refuse |
+| Serena | `outline`, `find_symbol`, `replace_symbol` via tree-sitter (11 langages), édition vérifiée syntaxiquement ; `read_file` d'un fichier inchangé déjà lu renvoie un talon au lieu du contenu |
 | code-review-graph | `blast_radius` : graphe de références petgraph, BFS inverse profondeur 3 |
-| RTK | compression des sorties shell (ANSI, bruit, tests passés, doublons, tête/queue) |
+| RTK | compression des sorties shell (ANSI, bruit, tests passés, doublons, tête/queue) + filtres par commande : cargo, git, pytest, npm |
+| TOON | résultats tabulaires séparés par tabulations ; `grep` groupé par fichier, parallélisé |
 | caveman | 4 styles de sortie (Normal → Ultra-caveman) |
+| Délégation (Jev) | Jev estime l'effort (jamais au-dessus de votre choix, seulement si le cache est préservé) ; questions simples sans outil et résumés de compaction confiés à DeepSeek Flash (interrupteurs dans ⚙ Paramètres) |
 | Superpowers | 15 playbooks officiels (MIT) embarqués ; Jev en choisit au plus un par message, injecté une seule fois par discussion |
 | Audit sécurité (Cloudflare) | skill `security-audit` embarqué verbatim (MIT, 20 fichiers, schéma `report-schema.json`) ; Jev le route sur `security`, l'outil `audit_kit` le dépose dans `<workspace>/.omega/skills/security-audit/`, les validateurs `.cjs` ne tournent que si Node est présent |
 | Semgrep / mcp-scan | `security_scan` : 25 règles CWE, secrets masqués ; garde shell déterministe + avis Jev + approbation |

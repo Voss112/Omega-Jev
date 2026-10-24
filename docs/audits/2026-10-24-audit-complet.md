@@ -49,3 +49,5 @@ session : vérification indépendante **faible**, à reprendre par un relecteur 
   santé faisait un HEAD (vert alors que la recherche échouait). Corrigé (`40ed8d8`) : repli sur toute erreur, sonde
   par vraie requête, message 403/429 explicite qui oriente vers `docs_search`. Le blocage observé ensuite touchait
   aussi `curl` depuis la même IP (limitation temporaire par IP chez DuckDuckGo).
+- **Captcha DuckDuckGo** : un 202 avec page `anomaly-modal` était lu comme « aucun résultat ». Corrigé (`4885d9b`) :
+  détecté comme blocage, avec test de non-régression.

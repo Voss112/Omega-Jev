@@ -101,15 +101,21 @@ pub fn body(messages: &[Value], tools: Option<Value>, model: &str, effort: Effor
         }
     }
 
-    // Two cache breakpoints: the static system prompt, and the end of the history (read back next step).
-    let ephemeral = json!({ "type": "ephemeral" });
+    // Breakpoints: the static system prompt (with the tools before it) kept an hour, so a pause between turns does not
+    // rewrite it; the end of the previous request, read back even when this step added more than the 20-block
+    // lookback (parallel tool calls); the end of the history, read back next step. Longer TTLs come first, as required.
     if let Some(last) = system.last_mut() {
-        last["cache_control"] = ephemeral.clone();
+        last["cache_control"] = json!({ "type": "ephemeral", "ttl": "1h" });
     }
-    if let Some(block) = out.last_mut().and_then(|m| m["content"].as_array_mut()).and_then(|c| c.last_mut())
-        && !matches!(block["type"].as_str(), Some("thinking" | "redacted_thinking"))
-    {
-        block["cache_control"] = ephemeral;
+    let ephemeral = json!({ "type": "ephemeral" });
+    let answer = out.iter().rposition(|m| m["role"] == "assistant");
+    let previous_end = answer.and_then(|a| out[..a].iter().rposition(|m| m["role"] == "user"));
+    for i in previous_end.into_iter().chain(out.len().checked_sub(1)) {
+        if let Some(block) = out[i]["content"].as_array_mut().and_then(|c| c.last_mut())
+            && !matches!(block["type"].as_str(), Some("thinking" | "redacted_thinking"))
+        {
+            block["cache_control"] = ephemeral.clone();
+        }
     }
 
     let mut body = json!({ "model": model, "messages": out, "stream": true });
@@ -574,5 +580,60 @@ mod tests {
     fn api_error_reads_the_message_field() {
         assert_eq!(error_text(r#"{"error":{"message":"bad key"}}"#), "bad key");
         assert_eq!(error_text("<html>oops</html>"), "<html>oops</html>");
+    }
+
+    fn breakpoints(v: &Value) -> usize {
+        match v {
+            Value::Object(o) => usize::from(o.contains_key("cache_control")) + o.values().map(breakpoints).sum::<usize>(),
+            Value::Array(a) => a.iter().map(breakpoints).sum(),
+            _ => 0,
+        }
+    }
+
+    /// One prompt, then a step with twelve parallel calls and their results (more than the 20-block lookback).
+    fn wide_step() -> Vec<Value> {
+        let calls: Vec<Value> = (0..12)
+            .map(|k| json!({ "id": format!("t{k}"), "type": "function", "function": { "name": "grep", "arguments": "{}" } }))
+            .collect();
+        let mut msgs = vec![
+            json!({ "role": "system", "content": "SYS" }),
+            json!({ "role": "user", "content": "cherche" }),
+            json!({ "role": "assistant", "content": "", "tool_calls": calls }),
+        ];
+        msgs.extend((0..12).map(|k| json!({ "role": "tool", "tool_call_id": format!("t{k}"), "content": "hit" })));
+        msgs
+    }
+
+    #[test]
+    fn the_previous_request_end_carries_a_breakpoint() {
+        let b = body(&wide_step(), None, "claude-opus-5-5", Effort::Medium, true);
+        let prompt = b["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(prompt.last().unwrap()["cache_control"]["type"], "ephemeral", "fin de la requête précédente");
+        let results = b["messages"][2]["content"].as_array().unwrap();
+        assert_eq!(results.last().unwrap()["cache_control"]["type"], "ephemeral", "fin de l'historique");
+    }
+
+    #[test]
+    fn the_static_prefix_is_cached_for_an_hour() {
+        let b = body(&wide_step(), None, "claude-opus-5-5", Effort::Medium, true);
+        assert_eq!(b["system"].as_array().unwrap().last().unwrap()["cache_control"], json!({ "type": "ephemeral", "ttl": "1h" }));
+        assert!(b["messages"].as_array().unwrap().iter().all(|m| m["content"].to_string().find("\"1h\"").is_none()), "1h avant 5 min");
+    }
+
+    #[test]
+    fn never_more_than_four_breakpoints_nor_on_reasoning() {
+        let mut msgs = wide_step();
+        msgs.push(signed_answer("toolu_x"));
+        msgs.push(json!({ "role": "tool", "tool_call_id": "toolu_x", "content": "ok" }));
+        msgs.push(signed_answer("toolu_y"));
+        let b = body(&msgs, None, "claude-opus-5-5", Effort::Medium, true);
+        assert!(breakpoints(&b) <= 4, "{}", breakpoints(&b));
+        for m in b["messages"].as_array().unwrap() {
+            for block in m["content"].as_array().unwrap() {
+                if matches!(block["type"].as_str(), Some("thinking" | "redacted_thinking")) {
+                    assert!(block.get("cache_control").is_none());
+                }
+            }
+        }
     }
 }

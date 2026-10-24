@@ -1,104 +1,128 @@
-# Omega — agent IA local, anonyme, 100 % Rust
+<div align="center">
 
-**Jev** (System One, TypeSafe) prend toutes les décisions de contrôle : skill, budget de raisonnement, web, risque, impact.
-**DeepSeek V4.1 Flash**, **Claude** ou **Gemini** écrit le code et exécute les outils (System Two). La zone de saisie affiche trois sélecteurs — fournisseur, **modèle exact** (liste du compte + identifiant libre) et effort — et le modèle réellement utilisé reste visible dans l'en-tête, chaque réponse et le panneau Outils.
-Tout tient dans un seul binaire (Windows et Linux), sans serveur externe ni télémétrie.
+# Ω Omega
 
-## Démarrage
+**A local, anonymous AI coding agent. One native Rust binary. No server, no telemetry.**
 
-1. Windows : double-cliquer `Omega-0.9.0-x64.msi` (installation par utilisateur, sans droits admin, raccourci Bureau). Linux : `target/release/omega`.
-2. Au premier lancement, la fenêtre ⚙ Paramètres s'ouvre. Coller la clé **DeepSeek** (platform.deepseek.com) et la clé **Jev** (console.typesafe.ai ; sans elle, un routeur local prend le relais). Claude et Gemini passent par l'abonnement (bouton « Se connecter » : Claude Pro/Max, Google AI Pro/Ultra via Gemini Code Assist) ou une clé API. GitHub se connecte au même endroit (code à saisir sur github.com).
-3. Choisir un dossier de travail (📁 en bas à gauche). Par défaut : `Documents\Omega` (`~/Documents/Omega` sous Linux).
+[![Release](https://img.shields.io/github/v/release/Voss112/Anonymous?style=flat-square)](https://github.com/Voss112/Anonymous/releases/latest)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue?style=flat-square)
+![Rust](https://img.shields.io/badge/rust-2024-orange?style=flat-square)
 
-Les clés peuvent aussi venir des variables `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` et `TYPESAFE_API_KEY`.
+[**Download the MSI**](https://github.com/Voss112/Anonymous/releases/latest) · [Français](README.fr.md)
 
-Règles permanentes d'un projet : `OMEGA.md` à sa racine (bouton « Créer OMEGA.md » dans le panneau Outils). `AGENTS.md` est aussi lu. `CLAUDE.md` n'est **jamais** envoyé (écrit pour Claude Code, souvent long : il serait refacturé à chaque requête).
+</div>
 
-## Interface
+---
 
-- **Fournisseur · modèle · effort** (zone de saisie) : ⟳ récupère la liste réelle des modèles du compte, « ✎ Autre identifiant… » accepte n'importe quel id (ex. `claude-opus-5-5`). Le choix est mémorisé par fournisseur dans `settings.toml` et chaque réponse porte le modèle qui l'a produite. Une erreur du fournisseur (modèle absent du compte, 404) s'affiche telle quelle : aucun repli silencieux.
-- **Fichiers** (bouton 📁 en haut) : arborescence du dossier de travail, clic pour ouvrir un fichier dans un onglet au-dessus de la discussion. Coloration syntaxique (Rust, Python, JS/TS, Go, C/C++, Java, C#, JSON, YAML, Markdown…), numéros de ligne, **✎ Modifier** puis `Ctrl+S` pour enregistrer (fins de ligne CRLF/LF respectées). Un onglet non enregistré ne se ferme pas et n'est jamais écrasé si l'agent modifie le fichier (« modifié sur le disque » + Recharger). Lecture seule au-delà de 512 Ko et pour les binaires.
-- **Tâches** (bouton en haut ou `/tasks`) : toutes les tâches programmées — à venir, en pause, terminées — avec compte à rebours, historique des exécutions et lien vers chaque discussion ouverte ; Lancer maintenant, Pause/Reprendre, Modifier, Supprimer.
-- **`/clear`** : vide le contexte (nouvelle discussion, l'ancienne reste dans l'historique).
-- **Images** : glisser-déposer, `Ctrl+V` (capture d'écran) ou 🖼 dans la zone de saisie. Redimensionnées à 1568 px, 4 max par message, vignettes dans la bulle. Envoyées uniquement aux moteurs qui lisent les images (Claude) ; DeepSeek les garde locales.
-- **🎙 Dictée** (`Ctrl+M` ou bouton micro ; un à-coup du pilote audio — « buffer underrun or overrun » — n'interrompt plus la dictée) : parlez, chaque phrase s'écrit dans la zone de saisie dès la pause qui la termine ; `Entrée` arrête et envoie, `Échap` arrête. Whisper large-v3-turbo **en local sur le GPU** (Vulkan ; CPU sans GPU) : 0,2 s pour une phrase, 0,3 s pour 11 s de parole sur RX 6950 XT. Le silence ne produit rien. Langue dans ⚙ Paramètres (français par défaut, détection automatique possible). Au premier usage, le modèle (574 Mo) est téléchargé une fois depuis Hugging Face, via le proxy configuré, et son SHA-256 est vérifié.
-- **Tableaux** : colonnes dimensionnées sur la largeur de lecture, texte replié dans chaque cellule.
-- **⏰ Programmer** : prompt + jour + heure + moteur + modèle + effort, répétition quotidienne optionnelle. À l'heure dite, Omega ouvre une discussion et l'exécute **toujours en bypass**, avec le modèle choisi au moment de la programmation, sans toucher à vos réglages, à votre brouillon ni à la discussion ouverte. Une tâche quotidienne garde son heure locale au changement d'heure. Les tâches sont enregistrées dans `%APPDATA%/Omega/schedules.json` et ne partent que si Omega est ouvert.
-- **⚙ Paramètres → Économies de tokens · preuve** : chaque requête est mesurée avec les chiffres du fournisseur (entrée, cache lu/écrit, sortie, Jev) ; les leviers (lazy tools, RTK, playbooks, compaction, cache) sont mesurés en octets sur la vraie requête et convertis avec le ratio tokens/octet calibré sur vos requêtes, puis pondérés au tarif réel. **Banc d'essai** : Jev noté sur 7 demandes étiquetées, lazy tools / RTK / TOON en tokens exacts (`count_tokens` Claude), cache vérifié par deux requêtes réelles, style A/B, CLI-Anything.
-- **Dernier verdict Jev** : skill, source, confiance, cinq métriques (code, web, risque, impact, apps) et outils chargés, en cartes compactes.
-- **Étapes max / tour** : case **Infinie** pour les longues tâches sans surveillance (■ Stop reste possible).
+## Why Omega
 
-## Délégation, paliers Claude, tests en continu (⚙ Paramètres → Comportement)
+Omega splits the work between two systems:
 
-- **Délégation** : questions simples, résumés, **tests unitaires / intégration / end-to-end** et **commentaires** partent sur **Gemini 3.8 Flash** (modèle réglable : « Gemini Flash »), puis **DeepSeek V4.1 Flash** si Gemini est indisponible ou à 100 % de quota (429 *quota* : Gemini est mis de côté 30 min, sans réessai inutile), puis le moteur principal. Jev décide (questions `simple` et `routine`) ; rien de sensible (sécurité, API publique, apps) n'est délégué. Interrupteurs : *Délégation*, *Gemini Flash d'abord*, *Tests & commentaires*.
-- **Modèle auto (Claude)** : Jev note la difficulté de chaque tour (effort estimé, skill, risque, impact) : texte ou retouche simple → **Haiku** en effort Low, travail courant → **Sonnet**, difficile → votre modèle. Jamais au-dessus de votre choix, même génération (opus-5-5 → sonnet-5-5 → haiku-5-5). Pas de bascule quand l'historique dépasse 40 k tokens et que le cache du modèle moins cher est froid. Si le palier inférieur échoue ou dépasse 24 étapes, votre modèle reprend le tour en cours. Chaque réponse affiche le modèle qui l'a écrite.
-- **Tests en continu** : les tests tournent en arrière-plan pendant que l'agent code. Watcher natif s'il est installé — Rust `cargo watch`, JS/TS `vitest` / `jest --watchAll`, Python `ptw`, Go `gotestsum --watch`, .NET `dotnet watch test`, Java `gradle --continuous` — sinon le watcher Omega (surveillance du dossier + relance immédiate à chaque modification de l'agent) avec `cargo test`, `npm test`, `pytest`, `go test`, `mvn test`, `ctest`, `rspec`, `phpunit`, `deno test`. Le résultat arrive dans le tour sous forme de note `[live-tests]` ; l'agent ne relance plus la suite (une commande de test renvoie le résultat du watcher), et la fin du tour signale un échec du dernier changement. État dans le panneau Outils ; aucun processus ne survit à la fermeture.
-- **Kits** (outil `kits`, chargé par Jev pour le design et le web, utilisé seulement si l'agent le juge utile) : canvas-ui, paper-shaders, motion-primitives, ui-layouts, cursify, design-taste, better-design, superdesign, scrapling, agent-reach. Installation par commandes figées, approuvées comme toute commande shell.
-- **Outils d'applications inactifs** (CLI-Anything type Blender, kits, audit) : retirés automatiquement de la requête après 3 tours sans appel.
-- **GitHub** : connexion par code (device flow) ou jeton collé ; `git push` et `gh` du shell de l'agent s'authentifient avec (variables d'environnement du seul processus, rien d'écrit dans `.gitconfig`, jeton masqué dans les sorties). Interrupteur *Shell de l'agent*.
-- **Shell plus rapide** : une commande simple (`cargo test`, `git status`, `npm run build`…) démarre directement sans PowerShell (~25 ms au lieu de ~170 ms), et l'avis de Jev sur une commande inconnue est mémorisé pour la session.
+- **System One — Jev (TypeSafe)** makes every control decision: skill, reasoning budget, web access, risk, impact.
+- **System Two — DeepSeek V4.1 Flash, Claude or Gemini** writes the code and runs the tools.
 
-## Compiler
+Pick the provider, the exact model and the effort level right in the input box. The model actually used stays visible in the header, on every reply and in the Tools panel.
+
+## Highlights
+
+- **Fully local** — data in `%APPDATA%/Omega`, API keys encrypted with Windows DPAPI.
+- **Private by design** — generic User-Agent, anti-SSRF, optional Tor/SOCKS5 proxy, VPN detection and kill-switch.
+- **Local voice dictation** — Whisper large-v3-turbo on your GPU (Vulkan, CPU fallback). Nothing is recorded or uploaded.
+- **Safe edits** — every file is backed up before the agent writes it, one-click restore (↶), coloured diffs, automatic `cargo check` / `tsc` / `go vet` / `py_compile`.
+- **Token savings you can measure** — lazy tools, output compression, prompt caching and compaction, with real provider numbers.
+- **Built-in security audit** — 25 CWE rules in `security_scan` plus the Cloudflare `security-audit` skill.
+- **Subscriptions or API keys** — Claude Pro/Max, Google AI Pro/Ultra (Gemini Code Assist), or plain keys.
+
+## Install
+
+### Windows (recommended)
+
+1. Download **`Omega-0.9.0-x64.msi`** from the [latest release](https://github.com/Voss112/Anonymous/releases/latest).
+2. Double-click it. The install is per-user: no admin rights needed, and a Desktop shortcut is created.
+3. On first launch, **⚙ Settings** opens. Paste your **DeepSeek** key ([platform.deepseek.com](https://platform.deepseek.com)) and your **Jev** key ([console.typesafe.ai](https://console.typesafe.ai)). Without a Jev key, a local router takes over.
+4. Claude and Gemini connect through the **Sign in** button (subscription) or an API key.
+5. Pick a working folder (📁, bottom left). Default: `Documents\Omega`.
+
+Keys can also come from environment variables: `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `TYPESAFE_API_KEY`.
+
+> Voice dictation uses `vulkan-1.dll`, which ships with every GPU driver.
+
+### Linux
+
+Build from source (below). The usual X11/Wayland packages are required at runtime, as for any egui app.
+
+## Features
+
+### Interface
+
+| | |
+|---|---|
+| **Provider · model · effort** | ⟳ fetches the real model list of your account. "✎ Other id…" accepts any identifier. Provider errors (404, missing model) are shown as is: no silent fallback. |
+| **Files** (📁) | Workspace tree, syntax-highlighted tabs, line numbers, **✎ Edit** + `Ctrl+S` (CRLF/LF preserved). Unsaved tabs are never closed or overwritten. |
+| **Tasks** (`/tasks`) | Upcoming, paused and finished jobs with countdown, run history, Run now, Pause/Resume, Edit, Delete. |
+| **⏰ Schedule** | Prompt + day + time + engine + model + effort, optional daily repeat. Runs in bypass mode in its own chat, without touching your settings or draft. |
+| **🎙 Dictation** (`Ctrl+M`) | Each sentence lands in the input box at the pause. `Enter` stops and sends, `Esc` stops. |
+| **Images** | Drag and drop, `Ctrl+V` or 🖼. Resized to 1568 px, 4 per message. |
+| **Tables** | Columns sized to the reading width, wrapped cell text. |
+| **`/clear`** | New context. The old chat stays in history. |
+| **Export** | ⇩ any chat to Markdown. ✏ edit and ⟳ regenerate are available (files restored first). |
+
+### Delegation and cost control
+
+- **Delegation** — simple questions, summaries, **unit / integration / end-to-end tests** and **comments** go to **Gemini Flash**, then **DeepSeek V4.1 Flash** if Gemini is unavailable or out of quota, then your main engine.
+- **Auto model (Claude)** — Jev rates each turn: simple edits → **Haiku**, everyday work → **Sonnet**, hard tasks → your model. Never above your choice, never at the expense of a warm cache.
+- **Continuous tests** — tests run in the background while the agent codes (`cargo watch`, `vitest`, `jest`, `ptw`, `gotestsum`, `dotnet watch test`, `gradle --continuous`, or Omega's own watcher).
+- **Savings proof** (⚙ Settings) — per-request input, cache read/write, output and Jev usage, plus a benchmark of Jev on 7 labelled prompts.
+- **Unlimited steps** — the **Infinite** switch allows long unattended tasks. ■ Stop always works.
+
+### Built-in tools
+
+| Replaces | Omega implementation |
+|---|---|
+| lazy-tool | Jev picks the skill and only its tools are sent. The set grows monotonically per chat, so the cache stays stable. |
+| Serena | `outline`, `find_symbol`, `replace_symbol` through tree-sitter (11 languages), syntax-checked edits. |
+| code-review-graph | `blast_radius`: petgraph reference graph, reverse BFS to depth 3. |
+| RTK | Shell output compression (ANSI, noise, passed tests, duplicates) with cargo, git, pytest and npm filters. |
+| TOON | Tab-separated tabular results, grouped and parallel `grep`. |
+| caveman | 4 output styles, no narration between tools, grouped calls. |
+| Superpowers | 15 official playbooks (MIT), at most one injected per chat. |
+| Cloudflare audit | `security-audit` skill embedded verbatim (MIT) with `audit_kit`. |
+| Semgrep / mcp-scan | `security_scan`: 25 CWE rules, masked secrets, deterministic shell guard + Jev review + approval. |
+| CLI-Anything | `cli_anything`: 100+ CLIs (GIMP, Blender, LibreOffice, OBS…), install validated by you, `--json` execution without a shell. |
+| Web search | Anonymous DuckDuckGo, Jev Score ranking, dense Markdown pages, local BM25 cache. |
+
+## Security and privacy
+
+- **Reversible edits** — backups before every write, coloured diffs, optional per-edit approval.
+- **Bypass mode** (🔒/🔓) — accepts all permissions; destructive commands stay blocked.
+- **Clean process kill** — a timed-out or stopped command kills its whole process tree.
+- **Secrets stay secret** — API keys are DPAPI-encrypted, stripped from the environment of every process the agent starts, and never written in clear text (a DPAPI failure refuses the write).
+- **Subscriptions** — OAuth tokens sealed in `credentials/` (DPAPI).
+- **Voice** — captured and transcribed on your machine. The microphone is open only while dictating.
+- **Network** — private-address redirects and DNS resolutions are refused (anti-SSRF), web pages are marked untrusted, optional Tor/SOCKS5 proxy (`socks5h://127.0.0.1:9050`), VPN detection, optional kill-switch. The exit-IP check (ipwho.is) is **off by default**.
+- **Local data only** — `%APPDATA%/Omega` on Windows, `~/.local/share/Omega` on Linux (files `0600`).
+
+## Build from source
 
 ```sh
-cargo build --release                      # binaire optimisé (LTO), icône intégrée
-cargo test                                 # tests outils, domaine, DPAPI, SSRF, checkpoints
-cargo test --release -- --ignored voice_live dictation_live --nocapture   # dictée réelle (modèle + GPU)
-powershell -File installer/build-msi.ps1   # MSI (WiX 3.x dans %USERPROFILE%\tools\wix314 ou $env:WIX_BIN)
+cargo build --release                      # optimised binary (LTO), embedded icon
+cargo test                                 # tools, domain, DPAPI, SSRF, checkpoints
+powershell -File installer/build-msi.ps1   # MSI (WiX 3.x in %USERPROFILE%\tools\wix314 or $env:WIX_BIN)
 ```
 
-Windows (cible `x86_64-pc-windows-gnu`) : la dictée compile whisper.cpp. Prérequis, tous chemins dans `.cargo/config.toml` : MinGW-w64 (gcc, CMake, Ninja), `libclang.dll` pour bindgen, et en-têtes Vulkan + `glslc` + `libvulkan-1.dll.a` (paquets MSYS2 ucrt64). L'exe n'importe que des DLL système et `vulkan-1.dll` (fourni par le pilote GPU) ; la C++ runtime est liée statiquement (`build.rs`). `vendor/whisper-rs` : copie de whisper-rs 0.16.0 avec un correctif MinGW (voir `vendor/README.md`).
-
-Linux : paquets X11/Wayland usuels requis à l'exécution (comme toute app egui).
-
-## Ce qui remplace quoi (in-process)
-
-| Outil d'origine | Intégration Omega |
-|---|---|
-| lazy-tool | Jev choisit le skill ; seuls ses outils sont envoyés (ensemble monotone par discussion → cache stable). Claude 5+ : `tools` constant (outils différés `defer_loading`) et ajouts par `tool_addition` en milieu de conversation → le cache n'est jamais invalidé ; repli automatique en mode classique si l'API refuse |
-| Serena | `outline`, `find_symbol`, `replace_symbol` via tree-sitter (11 langages), édition vérifiée syntaxiquement ; `read_file` d'un fichier inchangé déjà lu renvoie un talon au lieu du contenu |
-| code-review-graph | `blast_radius` : graphe de références petgraph, BFS inverse profondeur 3 |
-| RTK | compression des sorties shell (ANSI, bruit, tests passés, doublons, tête/queue) + filtres par commande : cargo, git, pytest, npm |
-| TOON | résultats tabulaires séparés par tabulations ; `grep` groupé par fichier, parallélisé |
-| caveman | 4 styles de sortie (Normal → Ultra-caveman) + discipline commune à tous les moteurs : pas de narration entre outils, appels groupés, pas d'écho ni de récapitulatif ; `edit_file` + `until` pour remplacer un long bloc sans le recopier |
-| Micro-compaction (Claude Code) | au-delà du budget de contexte en plein tour, les anciens résultats d'outils volumineux sont remplacés par un talon d'une ligne (texte gardé dans l'interface) ; DeepSeek `Off` coupe vraiment la réflexion ; résumés sans réflexion |
-| Délégation (Jev) | Jev estime l'effort (jamais au-dessus de votre choix, seulement si le cache est préservé) ; questions simples sans outil et résumés de compaction confiés à DeepSeek Flash (interrupteurs dans ⚙ Paramètres) |
-| Superpowers | 15 playbooks officiels (MIT) embarqués ; Jev en choisit au plus un par message, injecté une seule fois par discussion |
-| Audit sécurité (Cloudflare) | skill `security-audit` embarqué verbatim (MIT, 20 fichiers, schéma `report-schema.json`) ; Jev le route sur `security`, l'outil `audit_kit` le dépose dans `<workspace>/.omega/skills/security-audit/`, les validateurs `.cjs` ne tournent que si Node est présent |
-| Semgrep / mcp-scan | `security_scan` : 25 règles CWE, secrets masqués ; garde shell déterministe + avis Jev + approbation |
-| CLI-Anything (HKUDS) | outil `cli_anything` : registre officiel (100+ CLIs : GIMP, Blender, LibreOffice, OBS, Zotero…), mode d'emploi SKILL.md à la demande, installation pip/npm validée par vous, exécution `--json` sans shell |
-| Recherche web | DuckDuckGo anonyme, tri des résultats par Jev Score, pages en Markdown dense, cache local BM25 |
-
-## Sécurité du code modifié
-
-- Chaque fichier modifié par l'agent est sauvegardé avant écriture : bouton ↶ sous le message pour tout restaurer.
-- Diff coloré dans chaque carte d'outil ; option « Valider chaque modification » (paramètres).
-- Après modification : `cargo check` / `tsc` / `go vet` / `py_compile` automatiques, erreurs renvoyées au modèle.
-- Bouton 🔒/🔓 dans la zone de saisie : mode **Bypass** (toutes les autorisations acceptées ; les commandes destructrices restent bloquées).
-- Commande arrêtée (délai dépassé ou ■ Stop) : tout l'arbre de processus est tué, aucun serveur ni watcher ne reste orphelin.
-- Les sources des dépendances (`~/.cargo/registry/src`) se lisent avec `read_file`/`outline`/`grep`, en lecture seule, sans shell ni autorisation.
-- ✏ modifier un message, ⟳ régénérer (fichiers restaurés d'abord), ⇩ exporter en Markdown.
-- Historique append-only (cache préfixe et raisonnement signé Claude préservés), résumé automatiquement au-delà du seuil de compaction (100k tokens par défaut).
-
-## Confidentialité
-
-- Données 100 % locales (`%APPDATA%/Omega` ou `~/.local/share/Omega`), fichiers en `0600` sous Linux.
-- Clés API chiffrées par DPAPI (liées à votre compte Windows).
-- Abonnements : jetons OAuth scellés dans `credentials/` (DPAPI), rafraîchis en série ; jeton Claude longue durée (`claude setup-token`) accepté sans échange réseau.
-- Images : redimensionnées et stockées dans la discussion locale, jamais envoyées à un moteur qui ne les lit pas.
-- Voix : capturée et transcrite sur la machine ; aucun audio n'est enregistré sur disque ni envoyé. Le micro n'est ouvert que pendant la dictée.
-- Anti-SSRF : redirections et résolutions DNS vers des adresses privées refusées ; pages web marquées « non fiables ».
-- User-Agent générique, aucun identifiant envoyé hors des appels API.
-- Proxy/Tor (`socks5h://127.0.0.1:9050`), détection VPN locale (adaptateurs), kill-switch optionnel ; la vérification de l'IP de sortie (ipwho.is) est **désactivée par défaut** et s'active dans ⚙ Paramètres.
-- Les clés API ne sont jamais transmises aux processus lancés par l'agent (`MOONSHOT_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `TYPESAFE_API_KEY` sont retirées de leur environnement) ; un échec de chiffrement DPAPI refuse l'écriture plutôt que de stocker une clé en clair.
+Windows target `x86_64-pc-windows-gnu`: dictation compiles whisper.cpp. Requirements (paths in `.cargo/config.toml`): MinGW-w64 (gcc, CMake, Ninja), `libclang.dll` for bindgen, and Vulkan headers + `glslc` + `libvulkan-1.dll.a` (MSYS2 ucrt64 packages). `.cargo/config.toml` holds machine-specific paths: adapt them to your setup.
 
 ## Architecture
 
 ```
 src/
-  domain/   modèle pur : discussion, route, skills, catalogue de modèles, outils, réglages
-  infra/    clients des moteurs (SSE), Jev, disque, HTTP, processus, VPN, DPAPI, voix (micro, Whisper)
-  app/      cas d'usage : routeur Jev, assemblage du contexte, boucle agent, dictée, auto-tests
-  tools/    outils natifs (fs, code, graphe, grep, shell, sécurité, web, compression)
-  ui/       interface egui (thème, sidebar, explorateur/onglets, chat, composer, planificateur, panneau outils, réglages)
+  domain/   pure model: chat, route, skills, model catalogue, tools, settings
+  infra/    engine clients (SSE), Jev, disk, HTTP, processes, VPN, DPAPI, voice
+  app/      use cases: Jev router, context assembly, agent loop, dictation, self-tests
+  tools/    native tools (fs, code, graph, grep, shell, security, web, compression)
+  ui/       egui interface (theme, sidebar, explorer, chat, composer, scheduler, tools, settings)
 ```
+
+## Project rules
+
+Drop an `OMEGA.md` at the root of a project to give the agent permanent rules (button "Create OMEGA.md" in the Tools panel). `AGENTS.md` is read too. `CLAUDE.md` is **never** sent: it is written for Claude Code and would be re-billed on every request.

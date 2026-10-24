@@ -1,0 +1,130 @@
+[
+  {
+    "verdict": "rejected",
+    "fingerprint": "omega/app/delegation-to-deepseek",
+    "title": "Simple turns and summaries delegated to DeepSeek",
+    "description": "New in 0.6.0: with delegation on, simple text turns and compaction transcripts of a Claude conversation are sent to the DeepSeek endpoint.",
+    "claimed_root_cause": "Conversation content crosses to a second provider.",
+    "trace": [
+      { "kind": "entrypoint", "file": "src/domain/settings.rs", "line": 72, "scope": "Settings::delegate", "description": "User toggle, exposed in Paramètres → Comportement." },
+      { "kind": "propagation", "file": "src/app/mod.rs", "line": 55, "scope": "Env::new", "description": "Helper built only when delegation is on, the active engine is not DeepSeek and a DeepSeek key exists." },
+      { "kind": "sink", "file": "src/app/agent.rs", "line": 98, "scope": "pick", "description": "Images never go to the helper; only Jev-verified simple, tool-free turns do." }
+    ],
+    "evidence": [
+      { "file": "src/app/agent.rs", "line": 98, "description": "Turn with images, without helper, or with delegation off stays on the main engine." },
+      { "file": "src/app/context.rs", "line": 144, "description": "Text engines receive a placeholder instead of image data." }
+    ],
+    "reason": "Intended, user-consented data flow (default approved by the owner on 2026-10-24) behind an explicit toggle and an existing DeepSeek key; same proxy, TLS and kill-switch. No lower-trust principal gains anything."
+  },
+  {
+    "verdict": "rejected",
+    "fingerprint": "omega/infra/secret/dpapi-raw-slice",
+    "title": "DPAPI output buffer read through slice::from_raw_parts",
+    "description": "The static scanner flags the unsafe slice built over the CryptProtectData/CryptUnprotectData output blob as raw-memory misuse.",
+    "claimed_root_cause": "An unsafe slice over an FFI buffer could read out of bounds or after free.",
+    "trace": [
+      { "kind": "entrypoint", "file": "src/infra/secret.rs", "line": 53, "scope": "platform::protect / unprotect", "description": "Credential bytes sealed or opened with the current Windows user's DPAPI key." },
+      { "kind": "sink", "file": "src/infra/secret.rs", "line": 72, "scope": "platform::call", "description": "Slice of cbData bytes over the API-allocated pbData, copied into a Vec." }
+    ],
+    "evidence": [
+      { "file": "src/infra/secret.rs", "line": 68, "description": "The slice is only built after a non-zero return and a non-null pbData." },
+      { "file": "src/infra/secret.rs", "line": 73, "description": "The buffer is copied first, then freed exactly once with LocalFree; no reference outlives it." }
+    ],
+    "reason": "The API contract (LocalAlloc'd buffer of exactly cbData bytes owned by the caller) is respected: bounds come from the API, the copy precedes the single free, and failure paths never touch the pointer."
+  },
+  {
+    "verdict": "rejected",
+    "fingerprint": "omega/llm/tool-addition-system-message",
+    "title": "Mid-conversation system messages for deferred tools",
+    "description": "New in 0.6.0: Claude 5+ requests carry role system messages with tool_addition blocks; system content has operator authority.",
+    "claimed_root_cause": "Untrusted text could reach a system message.",
+    "trace": [
+      { "kind": "entrypoint", "file": "src/infra/llm/anthropic.rs", "line": 95, "scope": "body, tools role", "description": "Internal tools entries built by context::surface_additions." },
+      { "kind": "sink", "file": "src/infra/llm/anthropic.rs", "line": 101, "scope": "body, tools role", "description": "Only tool_reference blocks naming a ToolKind are emitted." }
+    ],
+    "evidence": [
+      { "file": "src/infra/llm/anthropic.rs", "line": 101, "description": "Names come from ToolKind::name (static strings); no text block, no user or web content." }
+    ],
+    "reason": "The system message carries only references to statically named tools; untrusted data stays in tool_result blocks as the provider requires."
+  },
+  {
+    "verdict": "rejected",
+    "fingerprint": "omega/net/warm-up-preconnect",
+    "title": "Connection warm-up while typing",
+    "description": "New in 0.6.0: while the draft is non-empty, HEAD requests open TLS connections to the engine, Jev and the delegation helper.",
+    "claimed_root_cause": "Pre-connections could leak credentials, bypass the VPN kill-switch or the proxy.",
+    "trace": [
+      { "kind": "entrypoint", "file": "src/ui/actions.rs", "line": 409, "scope": "App::warm_up", "description": "Throttled to once per 240 s while typing." },
+      { "kind": "propagation", "file": "src/infra/llm/mod.rs", "line": 168, "scope": "Llm::warm", "description": "Refreshes a near-expiry subscription token, then warms the base URL." },
+      { "kind": "sink", "file": "src/infra/http.rs", "line": 115, "scope": "http::warm", "description": "HEAD to an https:// URL through the shared client." }
+    ],
+    "evidence": [
+      { "file": "src/ui/actions.rs", "line": 414, "description": "Kill-switch on and no active VPN: no warm-up at all." },
+      { "file": "src/infra/http.rs", "line": 115, "description": "Plain HEAD without any authorization header, https only, shared client (proxy and public-only DNS resolver applied)." },
+      { "file": "src/infra/jev.rs", "line": 93, "description": "Jev warm-up sends no key." }
+    ],
+    "reason": "No secret leaves the process, the same proxy, SSRF resolver and kill-switch apply; the only observable effect is a header-less HEAD to endpoints the next send contacts anyway."
+  },
+  {
+    "verdict": "rejected",
+    "fingerprint": "omega/tools/exec-code-eval",
+    "title": "Tool dispatcher named exec flagged as code evaluation",
+    "description": "The scanner's code-eval rule matches the identifier exec in the tool dispatcher.",
+    "claimed_root_cause": "Model-supplied arguments evaluated as code.",
+    "trace": [
+      { "kind": "entrypoint", "file": "src/tools/mod.rs", "line": 67, "scope": "tools::run", "description": "A tool call from the model is parsed into a ToolKind." },
+      { "kind": "sink", "file": "src/tools/mod.rs", "line": 75, "scope": "tools::exec", "description": "match on the ToolKind enum; each arm calls a typed Rust function." }
+    ],
+    "evidence": [
+      { "file": "src/tools/mod.rs", "line": 75, "description": "exec is a closed match over an enum; nothing is interpreted or evaluated." }
+    ],
+    "reason": "Name collision only. Shell execution is a separate, gated tool (guard classifier + approval), audited on its own."
+  },
+  {
+    "verdict": "rejected",
+    "fingerprint": "omega/tools/read-dedup-stub-path",
+    "title": "read_file stub resolves a model-supplied path",
+    "description": "New in 0.6.0: before reading, a re-read check stats the requested path to compare its mtime with the earlier read.",
+    "claimed_root_cause": "The stat could probe files outside the workspace.",
+    "trace": [
+      { "kind": "entrypoint", "file": "src/tools/mod.rs", "line": 82, "scope": "exec ReadFile", "description": "Model-supplied path and range." },
+      { "kind": "sink", "file": "src/tools/reads.rs", "line": 63, "scope": "Reads::unchanged", "description": "Path resolved with guard::resolve_read before any metadata call." }
+    ],
+    "evidence": [
+      { "file": "src/tools/reads.rs", "line": 63, "description": "Same sandbox as the real read (workspace or read-only dependency sources, links canonicalized)." }
+    ],
+    "reason": "The stub path goes through the exact guard of read_file; outside paths fail resolution and fall back to the normal read, which errors."
+  },
+  {
+    "verdict": "rejected",
+    "fingerprint": "omega/tools/security-scanner-own-patterns",
+    "title": "Scanner rule strings and self-test fixture flagged by the scanner",
+    "description": "HIGH matches for TLS bypass, unsafe deserialization, raw memory, an AWS key and os.system all sit inside the static scanner's own rule table and its self-test fixture.",
+    "claimed_root_cause": "Disabled TLS, unsafe deserialization, a hardcoded AWS key and command injection in the scanner module.",
+    "trace": [
+      { "kind": "entrypoint", "file": "src/tools/security.rs", "line": 73, "scope": "RULES", "description": "Regex literal describing TLS-bypass code to detect." },
+      { "kind": "sink", "file": "src/tools/security.rs", "line": 219, "scope": "self_test", "description": "Synthetic probe.py written to a temp dir to prove the rules fire." }
+    ],
+    "evidence": [
+      { "file": "src/tools/security.rs", "line": 107, "description": "Detection pattern, not a deserialization call." },
+      { "file": "src/tools/security.rs", "line": 135, "description": "Detection pattern for raw memory, not a use of it." },
+      { "file": "src/tools/security.rs", "line": 219, "description": "AKIAABCDEFGHIJKLMNOP is AWS's documented example key format inside a fixture that is only scanned, never executed." }
+    ],
+    "reason": "Every match is data the scanner searches for; the fixture is written to a temp directory and scanned, never run or sent anywhere."
+  },
+  {
+    "verdict": "rejected",
+    "fingerprint": "omega/tools/webindex-memory",
+    "title": "Local web index memory growth",
+    "description": "New in 0.6.0: an inverted index is kept in memory beside the cached pages.",
+    "claimed_root_cause": "Hostile pages could grow the index without bound.",
+    "trace": [
+      { "kind": "entrypoint", "file": "src/tools/web.rs", "line": 164, "scope": "web::fetch", "description": "Fetched page chunked (80 chunks, 4000 chars max each) and stored." },
+      { "kind": "sink", "file": "src/tools/webindex.rs", "line": 139, "scope": "Index::build", "description": "Term frequencies saturate at u16::MAX." }
+    ],
+    "evidence": [
+      { "file": "src/tools/webindex.rs", "line": 58, "description": "48 MiB text cap plus the 1000-page cap, oldest pages evicted first." }
+    ],
+    "reason": "Text is bounded per page and globally; the index is proportional to that bounded text and rebuilt lazily, so a hostile page cannot exhaust memory."
+  }
+]

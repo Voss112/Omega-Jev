@@ -7,6 +7,8 @@ pub mod clear;
 pub mod compact;
 pub mod context;
 pub mod dictation;
+#[cfg(test)]
+mod e2e;
 pub mod health;
 pub mod login;
 pub mod prompts;

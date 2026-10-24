@@ -126,7 +126,7 @@ pub(super) async fn ask_jev(jev: &Jev, input: &Input) -> Result<(Route, u64)> {
         (
             "routine".to_owned(),
             Question::noul(
-                "Mainly routine work a fast model does as well: writing or running tests (unit, integration, end-to-end), adding code comments or docstrings, or summarizing?",
+                "Is the request ONLY routine work a fast model does as well: writing or running tests (unit, integration, end-to-end), adding comments or docstrings to existing code without changing its behavior, or summarizing? A new feature, function or behavior change is not routine.",
             ),
         ),
         (
@@ -138,7 +138,7 @@ pub(super) async fn ask_jev(jev: &Jev, input: &Input) -> Result<(Route, u64)> {
     ];
     let a = jev.ask(state, &questions).await?;
     let (skill, confidence) = a.choice("skill").and_then(|(id, c)| Some((Skill::parse(&id)?, c))).context("skill")?;
-    let route = Route {
+    let mut route = Route {
         skill,
         source: Source::Jev,
         confidence,
@@ -153,7 +153,15 @@ pub(super) async fn ask_jev(jev: &Jev, input: &Input) -> Result<(Route, u64)> {
         routine: a.noul("routine").unwrap_or(0.0),
         design: a.noul("design").unwrap_or(0.0),
     };
+    route.playbook = route.playbook.take().filter(|_| needs_method(&route));
     Ok((route, a.tokens))
+}
+
+/// Below this effort a request is a one-liner: a methodology playbook would cost more tokens and steps than the task.
+const TRIVIAL: f32 = 0.25;
+
+fn needs_method(route: &Route) -> bool {
+    route.risky() || route.effort.is_none_or(|e| e >= TRIVIAL)
 }
 
 const KEYWORDS: &[(Skill, &[&str])] = &[
@@ -309,6 +317,15 @@ mod tests {
         let input = Input::of(&conversation("Continue."));
         assert_eq!(input.query, "Continue.");
         assert_eq!(input.follow_up().map(|r| r.skill), Some(Skill::Security));
+    }
+
+    #[test]
+    fn trivial_turns_skip_the_methodology_playbook() {
+        let trivial = Route { effort: Some(0.1), ..local("ajoute une fonction") };
+        assert!(!needs_method(&trivial));
+        assert!(needs_method(&Route { effort: Some(0.6), ..trivial.clone() }));
+        assert!(needs_method(&Route { risk: 0.9, ..trivial.clone() }), "sensible : méthode gardée");
+        assert!(needs_method(&Route { effort: None, ..trivial }), "sans estimation : gardée");
     }
 
     #[test]

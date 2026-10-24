@@ -5,8 +5,8 @@ const FAMILIES: [&str; 3] = ["haiku", "sonnet", "opus"];
 
 /// Below this difficulty a turn runs on Haiku (display a text, rename, small style fix).
 const HAIKU_BELOW: f32 = 0.3;
-/// Below this one, on Sonnet; above, on the user's model.
-const SONNET_BELOW: f32 = 0.65;
+/// Below this one, on Sonnet; above, on the user's model (deep, risky or security work).
+const SONNET_BELOW: f32 = 0.75;
 /// Past this prompt size a switch writes the whole history into a cold cache: only worth it when the
 /// cheaper model's cache is already warm (it answered the previous turn).
 pub const COLD_SWITCH_MAX: u64 = 40_000;
@@ -49,6 +49,7 @@ mod tests {
     fn easy_turns_go_down_a_tier_in_the_same_generation() {
         assert_eq!(pick("claude-opus-5-5", 0.1).as_deref(), Some("claude-haiku-5-5"));
         assert_eq!(pick("claude-opus-5-5", 0.5).as_deref(), Some("claude-sonnet-5-5"));
+        assert_eq!(pick("claude-opus-5-5", 0.7).as_deref(), Some("claude-sonnet-5-5"), "refactor courant");
         assert_eq!(pick("claude-opus-5-5", 0.9), None);
         assert_eq!(pick("claude-sonnet-4-5", 0.2).as_deref(), Some("claude-haiku-4-5"));
     }

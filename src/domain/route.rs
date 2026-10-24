@@ -122,8 +122,9 @@ impl Route {
         if self.risky() {
             d += 0.25;
         }
+        // A wide change asks for care more than for a bigger model: a nudge, not a tier jump.
         if self.wide_impact() {
-            d += 0.25;
+            d += 0.15;
         }
         d.clamp(0.0, 1.0)
     }

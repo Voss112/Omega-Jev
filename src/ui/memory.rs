@@ -4,6 +4,7 @@ use eframe::egui::{FontId, Ui};
 
 use super::{
     App,
+    i18n::tr,
     icons::Icon,
     theme::{ACCENT_HI, FAINT, SOFT},
     widgets,
@@ -16,11 +17,11 @@ enum Action {
 }
 
 pub fn show(app: &mut App, ui: &mut Ui, heading: fn(&mut Ui, &str)) {
-    heading(ui, "Mémoire");
+    heading(ui, tr("Mémoire", "Memory"));
     let notes = app.memory_notes.get_or_insert_with(|| memory::list(&memory::dir())).clone();
     let mut action = None;
     if notes.is_empty() {
-        ui.label(widgets::text("Aucune note : importez des .md (préférences, contexte) lus à chaque requête.", 11.5, FAINT));
+        ui.label(widgets::text(tr("Aucune note : importez des .md (préférences, contexte) lus à chaque requête.", "No notes: import .md files (preferences, context) read on every request."), 11.5, FAINT));
     }
     for note in &notes {
         if row(ui, note) {
@@ -29,7 +30,7 @@ pub fn show(app: &mut App, ui: &mut Ui, heading: fn(&mut Ui, &str)) {
     }
     ui.add_space(4.0);
     let tip = format!("Ajouter des fichiers .md à la mémoire ({MAX_FILES} max, {} car. envoyés au plus)", memory::MAX_CHARS);
-    if widgets::pill(ui, Some(Icon::Plus), "Importer des .md", ACCENT_HI, false).on_hover_text(tip).clicked() {
+    if widgets::pill(ui, Some(Icon::Plus), tr("Importer des .md", "Import .md"), ACCENT_HI, false).on_hover_text(tip).clicked() {
         action = Some(Action::Import);
     }
     match action {

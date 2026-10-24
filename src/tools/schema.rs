@@ -34,6 +34,18 @@ fn spec(kind: ToolKind) -> Value {
         process::shell_name()
     );
     let (desc, params): (&str, &[Param]) = match kind {
+        ToolKind::Computer => (
+            "See and drive the user's desktop. Returns a screenshot after each action; x/y are pixels of the latest screenshot. Prefer shell/files when possible.",
+            &[
+                ("action", "string", "screenshot | click | double_click | move | scroll | type | key", true),
+                ("x", "integer", "Screenshot x", false),
+                ("y", "integer", "Screenshot y", false),
+                ("button", "string", "left | right | middle", false),
+                ("amount", "integer", "scroll notches, + up / - down", false),
+                ("text", "string", "type: text to type", false),
+                ("keys", "string", "key: chord like ctrl+s, alt+tab, enter", false),
+            ],
+        ),
         ToolKind::ListDir => (
             "Directory tree (gitignore-aware).",
             &[("path", "string", "Dir, default .", false), ("depth", "integer", "1-5, default 2", false)],

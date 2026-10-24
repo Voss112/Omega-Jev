@@ -6,6 +6,7 @@ pub mod checkpoint;
 pub mod clihub;
 pub mod code;
 pub mod compress;
+pub mod computer;
 pub mod diagnostics;
 pub mod fs;
 pub mod graph;
@@ -53,11 +54,13 @@ pub struct ToolOutput {
     pub changed: Option<PathBuf>,
     /// Bytes the RTK compressor removed before the model saw `text`.
     pub rtk: u64,
+    /// Screenshots the model sees with the result (vision engines).
+    pub images: Vec<crate::domain::chat::Image>,
 }
 
 impl From<String> for ToolOutput {
     fn from(text: String) -> Self {
-        Self { text, diff: None, changed: None, rtk: 0 }
+        Self { text, diff: None, changed: None, rtk: 0, images: Vec::new() }
     }
 }
 
@@ -66,6 +69,9 @@ pub async fn run(ctx: &ToolCtx<'_>, call: &ToolCall) -> ToolOutput {
     let args: Value = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
     let (result, rtk) = compress::measured(async {
         match ToolKind::parse(&call.name) {
+            Some(kind) if ctx.env.settings.disabled_tools.contains(&kind) => {
+                Err(anyhow!("tool `{}` disabled by the user", call.name))
+            }
             Some(kind) => {
                 ctx.reads.ran(kind);
                 exec(ctx, kind, Args(&args)).await
@@ -80,6 +86,7 @@ pub async fn run(ctx: &ToolCtx<'_>, call: &ToolCall) -> ToolOutput {
 async fn exec(ctx: &ToolCtx<'_>, kind: ToolKind, a: Args<'_>) -> Result<ToolOutput> {
     let root = ctx.root.clone();
     let text = match kind {
+        ToolKind::Computer => return computer::run(ctx, a.0).await,
         ToolKind::ListDir => {
             let (path, depth) = (a.opt("path").unwrap_or_else(|| ".".into()), a.num("depth").unwrap_or(2).clamp(1, 5));
             blocking(move || fs::list(&root, &path, depth)).await
@@ -169,7 +176,7 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
 
 /// Asks the user in the chat; `false` if refused or the turn is gone. Bypass mode grants everything.
 async fn approve(ctx: &ToolCtx<'_>, kind: ApprovalKind, subject: String, reason: String) -> bool {
-    if ctx.env.settings.bypass {
+    if ctx.env.settings.unattended() {
         return true;
     }
     let (reply, rx) = oneshot::channel();

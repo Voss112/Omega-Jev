@@ -23,10 +23,12 @@ pub enum ToolKind {
     AuditKit,
     /// Curated external kits (design components, shaders, design skills, web reach and scraping).
     Kits,
+    /// Screen capture, mouse and keyboard of the user's desktop (fully autonomous mode).
+    Computer,
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 17] = [
+    pub const ALL: [ToolKind; 18] = [
         Self::ListDir,
         Self::ReadFile,
         Self::Outline,
@@ -44,6 +46,7 @@ impl ToolKind {
         Self::CliAnything,
         Self::AuditKit,
         Self::Kits,
+        Self::Computer,
     ];
     /// Loaded whenever code is involved: navigation, impact and security analysis are all read-only.
     pub const READ: &[ToolKind] =
@@ -69,6 +72,7 @@ impl ToolKind {
             Self::CliAnything => "cli_anything",
             Self::AuditKit => "audit_kit",
             Self::Kits => "kits",
+            Self::Computer => "computer",
         }
     }
 
@@ -76,7 +80,7 @@ impl ToolKind {
     pub fn read_only(self) -> bool {
         !matches!(
             self,
-            Self::EditFile | Self::ReplaceSymbol | Self::WriteFile | Self::Shell | Self::CliAnything | Self::AuditKit | Self::Kits
+            Self::EditFile | Self::ReplaceSymbol | Self::WriteFile | Self::Shell | Self::CliAnything | Self::AuditKit | Self::Kits | Self::Computer
         )
     }
 

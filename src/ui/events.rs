@@ -33,6 +33,7 @@ impl App {
                         l.effort = Some(effort);
                     }
                 }
+                Event::Terminal(out) => self.terminal.finished(&out),
                 Event::UpdateReady(path) => {
                     self.notify("Mise à jour téléchargée : installée à la fermeture d'Omega");
                     self.update = Some(path);
@@ -84,17 +85,18 @@ impl App {
                     }
                 }
                 Event::Done { conv, error } => {
-                    if self.live.remove(&conv).is_none() {
-                        continue;
-                    }
+                    let Some(live) = self.live.remove(&conv) else { continue };
                     let failed = error.is_some();
+                    let held = error.as_deref().is_some_and(|e| self.hold_on_quota(conv, live.engine, e));
                     if let Some(e) = error {
                         self.errors.insert(conv, e);
                     }
                     self.save(conv);
                     // The turn may have written files: the tree must re-read the disk.
                     self.files.invalidate();
-                    self.turn_ended(conv, failed);
+                    if !held {
+                        self.turn_ended(conv, failed);
+                    }
                 }
                 Event::Health(h) => self.health = h,
                 Event::Bench(rows) => {
@@ -104,6 +106,9 @@ impl App {
                 Event::Vpn(v) => self.vpn = Some(v),
                 Event::Connected { provider, result } => self.connected(provider, result),
                 Event::PlanUsage { provider, windows } => {
+                    if provider == crate::domain::auth::Provider::Claude {
+                        self.resume_after_quota(&windows);
+                    }
                     self.plan_usage.insert(provider, (windows, Instant::now()));
                 }
                 Event::AgyInstalled { result, login } => self.agy_installed(result, login),

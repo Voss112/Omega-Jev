@@ -11,6 +11,7 @@ use super::{
     dictation,
     extras::{doc_chips, live_pills},
     fx,
+    i18n::tr,
     icons::{self, Icon},
     queue,
     theme::{self, ACCENT, ACCENT_HI, AMBER, CYAN, FAINT, INDIGO, MUTED, RED, SOFT, TEXT},
@@ -70,7 +71,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
                 let edit = TextEdit::multiline(&mut app.draft)
                     .id(id)
-                    .hint_text("Demandez n'importe quoi…")
+                    .hint_text(tr("Demandez n'importe quoi…", "Ask anything…"))
                     .frame(Frame::NONE)
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
@@ -90,7 +91,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     |ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                         let compact = ui.available_width() < 760.0;
-                        if widgets::icon_button(ui, Icon::Plus, "Importer des fichiers (images, code, texte) — glisser-déposer et Ctrl+V marchent aussi")
+                        if widgets::icon_button(ui, Icon::Plus, tr("Importer des fichiers (images, code, texte) — glisser-déposer et Ctrl+V marchent aussi", "Import files (images, code, text) — drag-and-drop and Ctrl+V work too"))
                             .clicked()
                         {
                             pick = true;
@@ -104,11 +105,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                         bypass_toggle(app, ui, t);
                         if busy {
                             let ready = !app.draft.trim().is_empty() || !app.docs.is_empty();
-                            let tip = "Envoyer maintenant : l'agent lit ce message pendant qu'il travaille (Entrée = file d'attente)";
-                            force = ready && widgets::pill(ui, Some(Icon::Bolt), "Forcer", if ready { AMBER } else { FAINT }, false).on_hover_text(tip).clicked();
+                            let tip = tr("Envoyer maintenant : l'agent lit ce message pendant qu'il travaille (Entrée = file d'attente)", "Send now: the agent reads it while it works (Enter = queue)");
+                            force = ready && widgets::pill(ui, Some(Icon::Bolt), tr("Forcer", "Force"), if ready { AMBER } else { FAINT }, false).on_hover_text(tip).clicked();
                         }
-                        if widgets::pill(ui, Some(Icon::Clock), if compact { "" } else { "Programmer" }, MUTED, false)
-                            .on_hover_text("Envoyer ce prompt plus tard, avec le moteur et l'effort choisis (toujours en bypass)")
+                        if widgets::pill(ui, Some(Icon::Clock), if compact { "" } else { tr("Programmer", "Schedule") }, MUTED, false)
+                            .on_hover_text(tr("Envoyer ce prompt plus tard, avec le moteur et l'effort choisis (toujours en bypass)", "Send this prompt later with the chosen engine and effort (always bypass)"))
                             .clicked()
                         {
                             schedule = true;
@@ -144,11 +145,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         }
         if ui.ctx().input(|i| !i.raw.hovered_files.is_empty()) {
             shapes.push(Shape::rect_stroke(rect, RADIUS, Stroke::new(2.0, CYAN), StrokeKind::Inside));
-            p.text(rect.center(), Align2::CENTER_CENTER, "Déposez vos fichiers ici", FontId::proportional(14.0), CYAN);
+            p.text(rect.center(), Align2::CENTER_CENTER, tr("Déposez vos fichiers ici", "Drop your files here"), FontId::proportional(14.0), CYAN);
         }
         p.set(bg, Shape::Vec(shapes));
         ui.add_space(8.0);
         hints(ui, app.settings.style.label());
+        super::terminal::show(app, ui);
     });
     if cancel_edit {
         app.cancel_edit();
@@ -188,13 +190,13 @@ fn editing_banner(ui: &mut Ui) -> bool {
             ui.allocate_ui(vec2(width, 30.0), |ui| {
                 widgets::truncated(
                     ui,
-                    "Modification : les messages suivants et leurs changements de fichiers seront annulés à l'envoi.",
+                    tr("Modification : les messages suivants et leurs changements de fichiers seront annulés à l'envoi.", "Editing: later messages and their file changes are undone on send."),
                     FontId::proportional(12.5),
                     AMBER,
                 );
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                cancel = widgets::pill(ui, Some(Icon::Close), "Annuler (Échap)", SOFT, false).clicked();
+                cancel = widgets::pill(ui, Some(Icon::Close), tr("Annuler (Échap)", "Cancel (Esc)"), SOFT, false).clicked();
             });
         });
     });
@@ -212,13 +214,14 @@ fn editing_banner(ui: &mut Ui) -> bool {
 
 /// Keyboard hints under the box; trailing items drop out when the column is narrow.
 fn hints(ui: &mut Ui, style: &str) {
-    let items: [(&str, &str); 6] = [
-        ("Entrée", "envoyer"),
-        ("Maj+Entrée", "nouvelle ligne"),
-        ("Ctrl+M", "dicter"),
-        ("Ctrl+N", "nouvelle discussion"),
-        ("Échap", "stop"),
-        ("/clear", "vider le contexte"),
+    let items: [(&str, &str); 7] = [
+        (tr("Entrée", "Enter"), tr("envoyer", "send")),
+        (tr("Maj+Entrée", "Shift+Enter"), tr("nouvelle ligne", "new line")),
+        ("Ctrl+M", tr("dicter", "dictate")),
+        ("Ctrl+N", tr("nouvelle discussion", "new chat")),
+        ("Ctrl+`", "terminal"),
+        (tr("Échap", "Esc"), "stop"),
+        ("/clear", tr("vider le contexte", "clear context")),
     ];
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
     let font = FontId::proportional(11.0);
@@ -226,7 +229,7 @@ fn hints(ui: &mut Ui, style: &str) {
     let p = ui.painter();
     let mut pieces = Vec::new();
     let mut total = 0.0;
-    let tail = p.layout_no_wrap(format!("Style {style}  ·  Omega peut se tromper"), font.clone(), FAINT);
+    let tail = p.layout_no_wrap(format!("Style {style}  ·  {}", tr("Omega peut se tromper", "Omega can make mistakes")), font.clone(), FAINT);
     for (key, what) in items {
         let k = p.layout_no_wrap(key.to_owned(), key_font.clone(), MUTED);
         let w = p.layout_no_wrap(what.to_owned(), font.clone(), FAINT);

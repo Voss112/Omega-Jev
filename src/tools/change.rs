@@ -46,7 +46,7 @@ pub async fn apply(ctx: &ToolCtx<'_>, change: Change) -> Result<ToolOutput> {
         Ok(())
     })
     .await?;
-    Ok(ToolOutput { text: format!("{} (+{added} -{removed})", change.action), diff: Some(unified), changed: Some(change.path), rtk: 0 })
+    Ok(ToolOutput { text: format!("{} (+{added} -{removed})", change.action), diff: Some(unified), changed: Some(change.path), rtk: 0, images: Vec::new() })
 }
 
 fn clip_lines(diff: &str) -> String {

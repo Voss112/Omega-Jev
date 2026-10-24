@@ -79,6 +79,11 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
     // App tools nobody called for a few turns leave the request (the CLI-Anything app, kits, audit kit).
     prune_idle_apps(conv, &route);
     conv.toolset.extend(route.tools());
+    if env.settings.computer && env.llm.engine.vision() {
+        conv.toolset.insert(ToolKind::Computer);
+    }
+    // Tools switched off in the right panel never reach the request.
+    conv.toolset.retain(|t| !env.settings.disabled_tools.contains(t));
     let tools_added = if env.llm.deferred_tools() { context::tool_additions(conv, visible) } else { Vec::new() };
     if let Some(m) = conv.last_user_mut() {
         m.preamble.clone_from(&preamble);
@@ -367,7 +372,7 @@ async fn run_tools(conv: &mut Conversation, ctx: &ToolCtx<'_>, calls: &[ToolCall
         live.edited();
     }
     // A build manifest or build script changed after web content: compiling would run it unasked.
-    let unsafe_build = !ctx.env.settings.bypass && ctx.reads.untrusted() && changed.iter().any(|p| diagnostics::builds(p));
+    let unsafe_build = !ctx.env.settings.unattended() && ctx.reads.untrusted() && changed.iter().any(|p| diagnostics::builds(p));
     if unsafe_build {
         output.text.push_str("
 
@@ -403,7 +408,13 @@ fn groups(calls: &[ToolCall]) -> Vec<&[ToolCall]> {
 }
 
 fn commit_tool(conv: &mut Conversation, emit: &Emitter, call: &ToolCall, output: ToolOutput) {
-    let msg = Message { diff: output.diff, rtk: output.rtk, ..Message::tool(call.id.clone(), output.text) };
+    if !output.images.is_empty() {
+        // Only the newest screenshot is ever sent: older ones would just bloat the saved conversation.
+        for m in conv.messages.iter_mut().filter(|m| m.role == crate::domain::chat::Role::Tool) {
+            m.images.clear();
+        }
+    }
+    let msg = Message { diff: output.diff, rtk: output.rtk, images: output.images, ..Message::tool(call.id.clone(), output.text) };
     commit(conv, emit, msg);
 }
 

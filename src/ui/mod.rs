@@ -12,6 +12,7 @@ mod extras;
 mod files;
 mod highlight;
 mod fx;
+mod i18n;
 mod icons;
 mod login;
 mod markdown;
@@ -20,13 +21,16 @@ mod panel;
 mod pace;
 mod plans;
 mod queue;
+mod resume;
 mod savings;
 mod scale;
 mod schedule;
 mod settings;
 mod sidebar;
 mod tasks;
+mod terminal;
 mod theme;
+mod toolbox;
 mod tray;
 mod update;
 mod widgets;
@@ -169,6 +173,9 @@ pub struct App {
     docs: Vec<docs::Doc>,
     /// Memory notes shown in the panel; `None` → re-read from disk.
     memory_notes: Option<Vec<crate::infra::memory::Note>>,
+    terminal: terminal::Terminal,
+    /// Conversations paused on the Claude plan limit.
+    waiting: resume::Waiting,
     /// System tray icon (absent when disabled or unavailable).
     tray: Option<tray::Tray>,
     /// Settings changed: the tray icon is re-synced on the next frame (needs the egui context).
@@ -241,6 +248,8 @@ impl App {
             queue: HashMap::new(),
             docs: Vec::new(),
             memory_notes: None,
+            terminal: terminal::Terminal::default(),
+            waiting: resume::Waiting::default(),
             tray: None,
             tray_sync: false,
             update: None,
@@ -267,6 +276,7 @@ impl App {
         app.refresh_models(engine);
         app.spawn(async { tokio::task::spawn_blocking(|| checkpoint::prune(CHECKPOINT_MAX_AGE)).await });
         app.apply_system(ctx);
+        i18n::set(app.settings.ui_lang);
         app.start_updates();
         if tray::background_launch() && app.tray.is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));

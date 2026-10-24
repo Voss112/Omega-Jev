@@ -125,6 +125,25 @@ pub struct Settings {
     pub tray: bool,
     /// Start with Windows (per-user Run key).
     pub autostart: bool,
+    /// Fully autonomous: every command and install runs without asking (destructive ones included).
+    pub autonomous: bool,
+    /// Lets the agent see the screen and drive the mouse and keyboard (vision engines only).
+    pub computer: bool,
+    /// Interface language; also the language reasoning is shown in.
+    pub ui_lang: UiLang,
+    /// Claude subscription limit reached → wait for the quota to drop, then resume the turn.
+    pub resume_on_quota: bool,
+    /// Tools unchecked in the right panel: never offered to the model.
+    pub disabled_tools: std::collections::BTreeSet<crate::domain::tool::ToolKind>,
+}
+
+/// Language of the interface.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiLang {
+    #[default]
+    Fr,
+    En,
 }
 
 impl Default for Settings {
@@ -171,11 +190,20 @@ impl Default for Settings {
             auto_update: true,
             tray: true,
             autostart: false,
+            autonomous: true,
+            computer: false,
+            ui_lang: UiLang::Fr,
+            resume_on_quota: false,
+            disabled_tools: std::collections::BTreeSet::new(),
         }
     }
 }
 
 impl Settings {
+    /// Every approval auto-granted: the Bypass toggle or the fully autonomous mode (hard blocks still apply).
+    pub fn unattended(&self) -> bool {
+        self.bypass || self.autonomous
+    }
     /// (url, key, model) configured for `engine`.
     pub fn endpoint(&self, engine: Engine) -> (&str, &str, &str) {
         let model = self.model(engine);

@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod autostart;
+pub mod desktop;
 pub mod http;
 pub mod jev;
 pub mod llm;

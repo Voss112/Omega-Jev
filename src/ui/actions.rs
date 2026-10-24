@@ -117,6 +117,8 @@ impl App {
                 c.truncate(idx);
             }
         }
+        // A new message supersedes an automatic resume.
+        self.cancel_wait(id);
         let Some(conv) = self.conv_mut(id) else { return };
         conv.repair();
         conv.push(if images.is_empty() { Message::user(text) } else { Message::user_with(text, images) });
@@ -249,7 +251,8 @@ impl App {
             }
         }
         self.save(id);
-        // Stopped by hand: unread forced messages return to the queue, which stays paused.
+        // Stopped by hand: no automatic resume; unread forced messages return to the queue, which stays paused.
+        self.cancel_wait(id);
         self.turn_ended(id, true);
     }
 
@@ -272,6 +275,7 @@ impl App {
             self.notify(format!("Démarrage avec Windows : {e:#}"));
         }
         self.settings = settings;
+        super::i18n::set(self.settings.ui_lang);
         self.env = env;
         self.tray_sync = true;
         if updates {

@@ -29,6 +29,9 @@ use crate::{
 
 const OUTPUT_CAP: u64 = 2 << 20;
 
+/// After the process exits, its output gets this long to flush before background children holding the pipes are left alone.
+const DRAIN: Duration = Duration::from_secs(2);
+
 /// A test command waits this long for the live watcher's run instead of starting a second one.
 const LIVE_WAIT: Duration = Duration::from_secs(180);
 
@@ -75,7 +78,7 @@ pub async fn gate(ctx: &ToolCtx<'_>, cmd: &str) -> Result<()> {
     let reason = match guard::assess(cmd) {
         Verdict::Blocked(why) => bail!("blocked by security guard: {why}"),
         // Bypass: no prompt and no Jev second opinion (saves a call per command).
-        _ if ctx.env.settings.bypass => return Ok(()),
+        _ if ctx.env.settings.unattended() => return Ok(()),
         Verdict::Risky(why) => Some(why.to_owned()),
         // Text the model may have been fed (a web page) can hide in a comment: Jev's opinion is not enough.
         Verdict::Unknown if cmd.contains('#') => Some("commentaire dans une commande non reconnue".to_owned()),
@@ -144,21 +147,43 @@ pub async fn run_command(mut command: process::Command, dir: &Path, timeout_secs
     let mut child = command.spawn().context("cannot start process")?;
     let (stdout, stderr) = (child.stdout.take().context("stdout")?, child.stderr.take().context("stderr")?);
     let mut tree = Tree { child, done: false };
-    let run = async {
-        let (out, err) = tokio::join!(capped(stdout), capped(stderr));
-        let status = tree.child.wait().await?;
-        tree.done = true;
-        anyhow::Ok((out?, err?, status))
-    };
-    // On timeout (or when the turn is stopped) the tree is dropped: the process and its children are killed.
-    let (out, err, status) = tokio::time::timeout(Duration::from_secs(timeout_secs as u64), run)
+    let limit = Duration::from_secs(timeout_secs as u64);
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let (status, detached) = {
+        let reading = async { tokio::join!(capped(stdout, &mut out), capped(stderr, &mut err)) };
+        tokio::pin!(reading);
+        // The command is over when its process exits, not when its pipes close: a background child it started
+        // (`Start-Process`, a dev server, a GUI) inherits them and would otherwise hold the call until the timeout.
+        tokio::time::timeout(limit, async {
+            tokio::select! {
+                status = tree.child.wait() => {
+                    let status = status?;
+                    let drained = tokio::time::timeout(DRAIN, &mut reading).await;
+                    let detached = match drained {
+                        Ok((o, e)) => { o?; e?; false }
+                        Err(_) => true,
+                    };
+                    anyhow::Ok((status, detached))
+                }
+                (o, e) = &mut reading => {
+                    o?;
+                    e?;
+                    anyhow::Ok((tree.child.wait().await?, false))
+                }
+            }
+        })
         .await
-        .map_err(|_| anyhow::anyhow!("timeout after {timeout_secs}s (process killed)"))??;
+        .map_err(|_| anyhow::anyhow!("timeout after {timeout_secs}s (process killed)"))??
+    };
+    tree.done = true;
     let mut text = String::from_utf8_lossy(&out).into_owned();
     let stderr = String::from_utf8_lossy(&err);
     if !stderr.trim().is_empty() {
         text.push_str("\n[stderr]\n");
         text.push_str(&stderr);
+    }
+    if detached {
+        text.push_str("\n(processus d'arrière-plan laissé en cours : sortie non attendue)");
     }
     let code = status.code().map_or_else(|| "killed".to_owned(), |c| c.to_string());
     Ok(format!("exit {code}\n{}", compress::command(line, &text)))
@@ -188,15 +213,37 @@ pub fn kill_tree(pid: u32) {
     let _ = kill;
 }
 
-/// Reads at most OUTPUT_CAP bytes; dropping the pipe afterwards stops a runaway writer.
-async fn capped(reader: impl AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    reader.take(OUTPUT_CAP).read_to_end(&mut buf).await?;
-    Ok(buf)
+/// Appends at most OUTPUT_CAP bytes to `buf` (kept even if the read is abandoned); dropping the pipe stops a runaway writer.
+async fn capped(reader: impl AsyncRead + Unpin, buf: &mut Vec<u8>) -> std::io::Result<()> {
+    let mut reader = reader.take(OUTPUT_CAP);
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = reader.read(&mut chunk).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
 }
 
 pub async fn probe() -> Result<String> {
     let out = execute(&std::env::temp_dir(), "echo omega", 30).await?;
     ensure!(out.contains("omega"), "sortie inattendue");
     Ok(process::shell_name().into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_background_child_does_not_hold_the_call_until_timeout() {
+        // `cmd /c start /b` leaves a child holding the inherited pipes for 20 s.
+        let started = std::time::Instant::now();
+        let out = execute(&std::env::temp_dir(), "cmd /c \"start /b ping -n 20 127.0.0.1 >nul\"; echo fini", 15).await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+        assert!(out.starts_with("exit 0"), "{out}");
+        assert!(out.contains("fini"), "{out}");
+    }
 }

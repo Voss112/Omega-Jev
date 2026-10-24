@@ -152,6 +152,8 @@ pub enum Event {
     },
     /// A newer release was downloaded and verified; installed silently on exit.
     UpdateReady(std::path::PathBuf),
+    /// Output of a command typed in the user terminal.
+    Terminal(String),
     Message {
         conv: Uuid,
         msg: Message,

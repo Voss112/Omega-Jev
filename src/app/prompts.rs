@@ -81,6 +81,11 @@ pub fn project_rules(workspace: &Path) -> Option<(&'static str, String)> {
 }
 
 /// Stable per (settings, workspace and its root languages, rules file, day) → prefix-cache friendly.
+/// Fully autonomous mode: no one is there to approve, so the agent finishes the job itself.
+const AUTONOMOUS: &str = "
+# Autonomy
+Fully autonomous: the user approved running commands and installs in advance. Never ask them to run, install or click something: do it yourself (winget/npm/pip/cargo install, then retry). Git: commit, push and tag with git; releases with `gh release create` (install GitHub.cli via winget if missing; the shell is already authenticated). GUI-only steps: use the computer tool when available.";
+
 pub fn system(settings: &Settings, workspace: &Path) -> String {
     let verify = if settings.live_tests { VERIFY_LIVE } else { VERIFY };
     let mut prompt = format!(
@@ -98,6 +103,12 @@ Env: {} | shell: {} | workspace: {} | deps: {} | date: {}",
         guard::deps_root().map_or_else(|| "-".to_owned(), |d| d.display().to_string()),
         chrono::Local::now().format("%Y-%m-%d"),
     );
+    if settings.autonomous {
+        prompt.push_str(AUTONOMOUS);
+    }
+    if settings.ui_lang == crate::domain::settings::UiLang::Fr {
+        prompt.push_str("\nWrite your reasoning (thinking) in French.");
+    }
     if let Some((name, rules)) = project_rules(workspace) {
         let _ = write!(
             prompt,

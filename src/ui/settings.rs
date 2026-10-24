@@ -8,6 +8,7 @@ use eframe::egui::{
 
 use super::{
     App, fx,
+    i18n::tr,
     icons::{self, Icon},
     theme::{EDGE, EDGE_HI, FAINT, GREEN, MUTED, SOFT, TEXT},
     widgets,
@@ -15,7 +16,7 @@ use super::{
 use crate::{
     domain::{
         auth::{AuthMode, Provider},
-        settings::{DICTATION_LANGUAGES, Settings, Style},
+        settings::{DICTATION_LANGUAGES, Settings, Style, UiLang},
     },
     infra::paths,
 };
@@ -280,44 +281,64 @@ fn form(
             }
         });
         ui.end_row();
-        ui.label(label("Étapes max / tour"));
+        ui.label(label(tr("Étapes max / tour", "Max steps / turn")));
         ui.horizontal(|ui| {
             ui.add_enabled(!s.unlimited_steps, DragValue::new(&mut s.max_steps).range(4..=96));
             ui.add_space(10.0);
-            ui.checkbox(&mut s.unlimited_steps, "Infinie")
-                .on_hover_text("Aucune limite d'étapes : le tour continue jusqu'à la réponse finale (■ Stop pour arrêter)");
+            ui.checkbox(&mut s.unlimited_steps, tr("Infinie", "Unlimited")).on_hover_text(tr(
+                "Aucune limite d'étapes : le tour continue jusqu'à la réponse finale (■ Stop pour arrêter)",
+                "No step limit: the turn runs until the final answer (■ Stop to end it)",
+            ));
         });
         ui.end_row();
-        switch(ui, "Commandes sûres", &mut s.auto_approve, "Exécuter sans demander (les risquées demandent toujours)");
-        switch(ui, "Bypass", &mut s.bypass, "Tout accepter sans demander (commandes destructrices toujours bloquées)");
-        switch(ui, "Modifications", &mut s.confirm_edits, "Valider chaque modification de fichier (diff affiché)");
-        switch(ui, "Diagnostics", &mut s.auto_diagnostics, "Vérifier le code après modification (cargo check, tsc, go vet…)");
-        switch(ui, "Effort auto", &mut s.auto_effort, "Effort ajusté par Jev (plafond = votre choix)");
-        switch(ui, "Délégation", &mut s.delegate, "Questions simples et résumés confiés à un modèle Flash");
-        switch(ui, "Gemini Flash d'abord", &mut s.delegate_gemini, "Gemini Flash reçoit la délégation ; DeepSeek Flash si indisponible ou quota à 100 %");
-        switch(ui, "Tests & commentaires", &mut s.delegate_routine, "Tests (unitaires, intégration, end-to-end) et commentaires de code délégués aussi");
-        switch(ui, "Modèle auto (Claude)", &mut s.auto_model, "Jev choisit Haiku, Sonnet ou votre modèle selon la difficulté de chaque tour");
-        switch(ui, "Tests en continu", &mut s.live_tests, "Tests relancés en arrière-plan pendant le code (cargo watch, vitest, ptw…) ; l'agent ne les relance plus à la fin");
+        switch(ui, tr("100 % autonome", "Fully autonomous"), &mut s.autonomous, tr(
+            "Commandes, installations, push : tout s'exécute sans demander (seules les commandes destructrices restent bloquées)",
+            "Commands, installs, pushes: everything runs without asking (only destructive commands stay blocked)",
+        ));
+        switch(ui, tr("Souris et clavier", "Mouse & keyboard"), &mut s.computer, tr(
+            "L'agent voit l'écran et pilote la souris et le clavier si besoin (moteurs avec vision)",
+            "The agent sees the screen and drives mouse and keyboard when needed (vision engines)",
+        ));
+        switch(ui, tr("Reprise après limite", "Resume after limit"), &mut s.resume_on_quota, tr(
+            "Limite Claude atteinte : surveille les % d'utilisation et reprend seul dès que le quota retombe",
+            "Claude limit reached: watches the usage % and resumes by itself once the quota drops",
+        ));
+        switch(ui, tr("Commandes sûres", "Safe commands"), &mut s.auto_approve, tr("Exécuter sans demander (les risquées demandent toujours)", "Run without asking (risky ones always ask)"));
+        switch(ui, "Bypass", &mut s.bypass, tr("Tout accepter sans demander (commandes destructrices toujours bloquées)", "Accept everything (destructive commands still blocked)"));
+        switch(ui, tr("Modifications", "Edits"), &mut s.confirm_edits, tr("Valider chaque modification de fichier (diff affiché)", "Approve each file edit (diff shown)"));
+        switch(ui, "Diagnostics", &mut s.auto_diagnostics, tr("Vérifier le code après modification (cargo check, tsc, go vet…)", "Check code after edits (cargo check, tsc, go vet…)"));
+        switch(ui, tr("Effort auto", "Auto effort"), &mut s.auto_effort, tr("Effort ajusté par Jev (plafond = votre choix)", "Effort tuned by Jev (capped by your choice)"));
+        switch(ui, tr("Délégation", "Delegation"), &mut s.delegate, tr("Questions simples et résumés confiés à un modèle Flash", "Simple questions and summaries go to a Flash model"));
+        switch(ui, tr("Gemini Flash d'abord", "Gemini Flash first"), &mut s.delegate_gemini, tr("Gemini Flash reçoit la délégation ; DeepSeek Flash si indisponible ou quota à 100 %", "Gemini Flash takes delegation; DeepSeek Flash if unavailable or quota at 100 %"));
+        switch(ui, tr("Tests & commentaires", "Tests & comments"), &mut s.delegate_routine, tr("Tests (unitaires, intégration, end-to-end) et commentaires de code délégués aussi", "Tests (unit, integration, end-to-end) and code comments delegated too"));
+        switch(ui, tr("Modèle auto (Claude)", "Auto model (Claude)"), &mut s.auto_model, tr("Jev choisit Haiku, Sonnet ou votre modèle selon la difficulté de chaque tour", "Jev picks Haiku, Sonnet or your model per turn difficulty"));
+        switch(ui, tr("Tests en continu", "Live tests"), &mut s.live_tests, tr("Tests relancés en arrière-plan pendant le code (cargo watch, vitest, ptw…) ; l'agent ne les relance plus à la fin", "Tests re-run in the background while coding (cargo watch, vitest, ptw…); the agent skips the final run"));
         ui.label(label("Compaction"));
         let mut k = s.compact_at / 1000;
         ui.add(DragValue::new(&mut k).range(20..=900).suffix(" k tokens"))
-            .on_hover_text("Au-delà, l'ancien historique est résumé automatiquement");
+            .on_hover_text(tr("Au-delà, l'ancien historique est résumé automatiquement", "Beyond this, old history is summarized automatically"));
         s.compact_at = k * 1000;
         ui.end_row();
     });
-    widgets::form_section(ui, Icon::Shield, "Confidentialité");
+    widgets::form_section(ui, Icon::Shield, tr("Confidentialité", "Privacy"));
     card_grid(ui, "privacy", |ui| {
-        text(ui, "Proxy", &mut s.proxy, "socks5h://127.0.0.1:9050 (Tor) — vide = direct");
-        switch(ui, "Kill-switch VPN", &mut s.require_vpn, "Bloquer l'envoi si aucun VPN n'est détecté");
-        switch(ui, "IP publique", &mut s.ip_lookup, "Vérifier l'IP de sortie (ipwho.is)");
+        text(ui, "Proxy", &mut s.proxy, tr("socks5h://127.0.0.1:9050 (Tor) — vide = direct", "socks5h://127.0.0.1:9050 (Tor) — empty = direct"));
+        switch(ui, "Kill-switch VPN", &mut s.require_vpn, tr("Bloquer l'envoi si aucun VPN n'est détecté", "Block sending when no VPN is detected"));
+        switch(ui, tr("IP publique", "Public IP"), &mut s.ip_lookup, tr("Vérifier l'IP de sortie (ipwho.is)", "Check the exit IP (ipwho.is)"));
     });
-    widgets::form_section(ui, Icon::Gear, "Système");
+    widgets::form_section(ui, Icon::Gear, tr("Système", "System"));
     card_grid(ui, "system", |ui| {
-        switch(ui, "Mises à jour", &mut s.auto_update, "Télécharger chaque release GitHub en silence, installée à la fermeture");
-        switch(ui, "Zone de notification", &mut s.tray, "Icône près de l'horloge ; fermer la fenêtre l'y range");
-        switch(ui, "Démarrage", &mut s.autostart, "Lancer Omega à l'ouverture de la session Windows");
+        ui.label(label(tr("Langue", "Language")));
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut s.ui_lang, UiLang::Fr, "Français");
+            ui.selectable_value(&mut s.ui_lang, UiLang::En, "English");
+        });
+        ui.end_row();
+        switch(ui, tr("Mises à jour", "Updates"), &mut s.auto_update, tr("Télécharger chaque release GitHub en silence, installée à la fermeture", "Download each GitHub release silently, installed on exit"));
+        switch(ui, tr("Zone de notification", "System tray"), &mut s.tray, tr("Icône près de l'horloge ; fermer la fenêtre l'y range", "Icon next to the clock; closing the window hides it there"));
+        switch(ui, tr("Démarrage", "Start-up"), &mut s.autostart, tr("Lancer Omega à l'ouverture de la session Windows", "Start Omega when Windows signs in"));
     });
-    widgets::form_section(ui, Icon::Folder, "Dossier de travail");
+    widgets::form_section(ui, Icon::Folder, tr("Dossier de travail", "Workspace"));
     widgets::card(ui, EDGE, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {

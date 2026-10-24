@@ -92,11 +92,18 @@ pub fn request(conv: &Conversation, env: &Env, system: &str, replay: bool) -> Va
         let target = Target { parts: target.parts && i >= conv.thinking_from, ..target };
         wire(m, target)
     }));
+    let visible = &conv.messages[from.min(conv.messages.len())..];
     if !env.llm.deferred_tools() {
+        if target.vision {
+            attach_screenshot(&mut messages, visible);
+        }
         let tools = (!conv.toolset.is_empty()).then(|| schema::schemas(&conv.toolset));
         return env.llm.body(&messages, tools);
     }
-    let messages = surface_additions(messages, &conv.messages[from..]);
+    let mut messages = surface_additions(messages, &conv.messages[from..]);
+    if target.vision {
+        attach_screenshot(&mut messages, visible);
+    }
     env.llm.body(&messages, Some(schema::deferred(ToolKind::READ)))
 }
 
@@ -130,6 +137,22 @@ fn surface_additions(messages: Vec<Value>, visible: &[Message]) -> Vec<Value> {
 pub fn tool_additions(conv: &Conversation, from: usize) -> Vec<ToolKind> {
     let offered: Vec<ToolKind> = conv.messages[from.min(conv.messages.len())..].iter().flat_map(|m| m.tools_added.iter().copied()).collect();
     conv.toolset.iter().copied().filter(|k| !ToolKind::READ.contains(k) && !offered.contains(k)).collect()
+}
+
+/// Only the newest screenshot travels (older ones would cost thousands of tokens each): it follows the run of tool
+/// results that holds it, as a user message every vision wire accepts.
+fn attach_screenshot(messages: &mut Vec<Value>, visible: &[Message]) {
+    let Some(shot) = visible.iter().rev().find(|m| m.role == Role::Tool && !m.images.is_empty()) else { return };
+    let Some(at) = messages.iter().rposition(|v| v["role"] == "tool" && v["tool_call_id"].as_str() == shot.tool_call_id.as_deref())
+    else {
+        return;
+    };
+    let end = messages[at..].iter().position(|v| v["role"] != "tool").map_or(messages.len(), |n| at + n);
+    let mut parts = vec![json!({ "type": "text", "text": "[capture d'écran du dernier appel computer]" })];
+    parts.extend(shot.images.iter().map(|img| {
+        json!({ "type": "image_url", "image_url": { "url": format!("data:{};base64,{}", img.media, img.data) } })
+    }));
+    messages.insert(end, json!({ "role": "user", "content": parts }));
 }
 
 /// Google's placeholder for a function call that has no thought signature of its own.
@@ -215,6 +238,27 @@ mod tests {
             routine: 0.0,
             design: 0.0,
         }
+    }
+
+    #[test]
+    fn only_the_newest_screenshot_follows_its_tool_results() {
+        use crate::domain::chat::{Image, ToolCall};
+        let shot = |id: &str, data: &str| Message { images: vec![Image::new("image/png", data.into())], ..Message::tool(id.into(), "ok".into()) };
+        let call = |id: &str| ToolCall { id: id.into(), name: "computer".into(), arguments: "{}".into(), ..ToolCall::default() };
+        let visible = vec![
+            Message::assistant(String::new(), String::new(), vec![call("a")]),
+            shot("a", "OLD"),
+            Message::assistant(String::new(), String::new(), vec![call("b"), call("c")]),
+            shot("b", "NEW"),
+            Message::tool("c".into(), "x".into()),
+        ];
+        let mut messages: Vec<Value> = visible.iter().map(|m| wire(m, Target::default())).collect();
+        attach_screenshot(&mut messages, &visible);
+        assert_eq!(messages.len(), 6);
+        let last = &messages[5];
+        assert_eq!(last["role"], "user", "après tout le lot de résultats d'outils");
+        let text = last.to_string();
+        assert!(text.contains("base64,NEW") && !text.contains("OLD"), "{text}");
     }
 
     #[test]

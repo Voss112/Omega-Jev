@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use super::{
     App,
+    i18n::tr,
     icons::Icon,
     theme::{ACCENT_HI, AMBER, FAINT, SOFT},
     widgets,
@@ -39,7 +40,7 @@ impl App {
         queue.push_back(Queued { text: super::docs::inline(&text, &self.docs), images: std::mem::take(&mut self.shots) });
         self.docs.clear();
         self.draft.clear();
-        self.notify("Ajouté à la file : envoyé à la fin du tour en cours");
+        self.notify(tr("Ajouté à la file : envoyé à la fin du tour en cours", "Queued: sent when the current turn ends"));
     }
 
     /// Composer content is read by the running agent after its next tool step.
@@ -53,7 +54,7 @@ impl App {
 
     fn force(&mut self, id: Uuid, text: String) {
         self.env.inbox.push(id, text);
-        self.notify("Transmis à l'agent : il le lit après sa prochaine action");
+        self.notify(tr("Transmis à l'agent : il le lit après sa prochaine action", "Passed to the agent: read after its next action"));
     }
 
     /// End of a turn: unread forced messages come first, then the queue resumes (paused after an error).
@@ -65,7 +66,7 @@ impl App {
         }
         if failed {
             if !queue.is_empty() {
-                self.notify("Tour interrompu : la file d'attente est en pause (Envoyer pour reprendre)");
+                self.notify(tr("Tour interrompu : la file d'attente est en pause (Envoyer pour reprendre)", "Turn interrupted: the queue is paused (Send to resume)"));
             }
             return;
         }
@@ -101,7 +102,7 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
     let busy = app.busy();
     let Some(queue) = app.queue.get(&id).filter(|q| !q.is_empty()) else { return };
     let mut action = None;
-    ui.label(widgets::text(format!("File d'attente · {}", queue.len()), 11.5, AMBER));
+    ui.label(widgets::text(format!("{} · {}", tr("File d'attente", "Queue"), queue.len()), 11.5, AMBER));
     for (i, item) in queue.iter().enumerate().take(SHOWN) {
         ui.horizontal(|ui| {
             let width = (ui.available_width() - 190.0).max(80.0);
@@ -115,10 +116,10 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
             });
             if busy {
                 let tip = "L'agent lit ce message pendant qu'il travaille (après sa prochaine action)";
-                if widgets::pill(ui, Some(Icon::Bolt), "Forcer", ACCENT_HI, false).on_hover_text(tip).clicked() {
+                if widgets::pill(ui, Some(Icon::Bolt), tr("Forcer", "Force"), ACCENT_HI, false).on_hover_text(tip).clicked() {
                     action = Some(Action::Force(i));
                 }
-            } else if widgets::pill(ui, Some(Icon::ArrowUp), "Envoyer", ACCENT_HI, false).clicked() {
+            } else if widgets::pill(ui, Some(Icon::ArrowUp), tr("Envoyer", "Send"), ACCENT_HI, false).clicked() {
                 action = Some(Action::Send(i));
             }
             if widgets::icon_button(ui, Icon::Close, "Retirer de la file").clicked() {

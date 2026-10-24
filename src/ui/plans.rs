@@ -26,7 +26,7 @@ pub fn show(app: &App, ui: &mut Ui, heading: impl Fn(&mut Ui, &str)) {
     if providers.is_empty() {
         return;
     }
-    heading(ui, "Abonnements");
+    heading(ui, super::i18n::tr("Abonnements", "Subscriptions"));
     for provider in providers {
         card(app, ui, provider);
         ui.add_space(6.0);

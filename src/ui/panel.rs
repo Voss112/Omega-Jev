@@ -2,7 +2,7 @@
 
 use eframe::egui::{Align, Color32, FontId, Layout, Rect, ScrollArea, Sense, Ui, pos2, vec2};
 
-use super::{
+use super::{i18n::tr, 
     App, fx,
     icons::{self, Icon},
     theme::{self, ACCENT, ACCENT_HI, AMBER, CYAN, EDGE, FAINT, GREEN, INDIGO, MUTED, RED, SOFT, TEXT, TILE_HOVER},
@@ -20,7 +20,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     ui.add_space(16.0);
     ui.horizontal(|ui| {
         ui.set_height(30.0);
-        ui.label(widgets::text("Outils", 16.5, TEXT).font(theme::bold(16.5)));
+        ui.label(widgets::text(tr("Outils", "Tools"), 16.5, TEXT).font(theme::bold(16.5)));
         let ok = app.health.iter().filter(|h| h.ok).count();
         if !app.health.is_empty() {
             let color = if ok == app.health.len() { GREEN } else { AMBER };
@@ -37,6 +37,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         tools(app, ui);
         live_tests(app, ui);
         super::memory::show(app, ui, heading);
+        super::toolbox::show(app, ui, heading);
         engine(app, ui);
         network(app, ui);
         economy(app, ui);
@@ -51,7 +52,7 @@ fn live_tests(app: &App, ui: &mut Ui) {
     if !app.settings.live_tests {
         return;
     }
-    heading(ui, "Tests en continu");
+    heading(ui, tr("Tests en continu", "Live tests"));
     let Some(status) = crate::tools::livetest::current(&app.env.workspace()).map(|r| r.status()) else {
         row(ui, true, "En attente", "démarre au premier tour qui touche au code");
         return;
@@ -145,7 +146,7 @@ fn tools(app: &mut App, ui: &mut Ui) {
 
 /// Provider + exact model id + effort: the always-visible answer to "which model runs this?".
 fn engine(app: &App, ui: &mut Ui) {
-    heading(ui, "Moteur actif");
+    heading(ui, tr("Moteur actif", "Active engine"));
     let engine = app.settings.engine;
     let model = app.settings.model(engine).to_owned();
     let effort = app.settings.effort.get(engine);
@@ -180,7 +181,7 @@ fn engine(app: &App, ui: &mut Ui) {
 }
 
 fn network(app: &App, ui: &mut Ui) {
-    heading(ui, "Réseau & anonymat");
+    heading(ui, tr("Réseau & anonymat", "Network & privacy"));
     match &app.vpn {
         Some(v) => {
             let detail = [v.tunnel.as_deref(), v.country.as_deref(), v.org.as_deref()]
@@ -220,7 +221,7 @@ fn line(ui: &mut Ui, key: &str, value: String) {
 fn economy(app: &App, ui: &mut Ui) {
     let Some(conv) = app.current_conv() else { return };
     let u = conv.usage;
-    heading(ui, "Économie de la session");
+    heading(ui, tr("Économie de la session", "Session savings"));
     widgets::card(ui, EDGE, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 3.0;
@@ -249,7 +250,7 @@ fn economy(app: &App, ui: &mut Ui) {
 }
 
 fn verdict(app: &App, ui: &mut Ui) {
-    heading(ui, "Dernier verdict Jev");
+    heading(ui, tr("Dernier verdict Jev", "Last Jev verdict"));
     let Some(route) = app.current_conv().and_then(|c| c.messages.iter().rev().find_map(|m| m.route.as_ref())) else {
         widgets::card(ui, EDGE, |ui| {
             ui.set_width(ui.available_width());
@@ -258,8 +259,8 @@ fn verdict(app: &App, ui: &mut Ui) {
                 icons::paint(ui.painter(), rect, Icon::Sparkle, FAINT);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.label(widgets::text("Aucun routage pour l'instant", 12.5, SOFT));
-                    ui.label(widgets::text("Jev se prononce au premier message envoyé.", 11.0, FAINT));
+                    ui.label(widgets::text(tr("Aucun routage pour l'instant", "No routing yet"), 12.5, SOFT));
+                    ui.label(widgets::text(tr("Jev se prononce au premier message envoyé.", "Jev decides on the first message."), 11.0, FAINT));
                 });
             });
         });

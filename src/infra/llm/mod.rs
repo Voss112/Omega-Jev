@@ -78,6 +78,16 @@ pub fn thinking_rejected(error: &anyhow::Error) -> bool {
     text.contains("signature") && text.contains("thinking")
 }
 
+pub use anthropic::uses_deferred_tools;
+
+/// A 400 about mid-conversation tool changes (model, account or beta not enabled): retry with classic tools.
+pub fn tools_beta_rejected(error: &anyhow::Error) -> bool {
+    const MARKERS: &[&str] =
+        &["tool_addition", "tool_reference", "defer_loading", "mid-conversation", "inline-tools", "beta", "role \"system\"", "system message"];
+    let text = format!("{error:#}").to_lowercase();
+    text.contains("400") && MARKERS.iter().any(|m| text.contains(m))
+}
+
 #[derive(Clone)]
 pub struct Llm {
     http: Client,
@@ -88,6 +98,8 @@ pub struct Llm {
     pub effort: Effort,
     /// `Some` = consumer subscription; the token is refreshed on demand.
     auth: Option<std::sync::Arc<Auth>>,
+    /// Claude deferred-tools mode still allowed (turned off for the session once the API refuses the beta).
+    deferred: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Llm {
@@ -105,11 +117,32 @@ impl Llm {
             (Engine::Claude, true) => claude::API.to_owned(),
             _ => base.trim().trim_end_matches('/').to_owned(),
         };
-        Self { http, engine, base, key, model: model.trim().into(), effort: settings.effort.get(engine), auth }
+        Self {
+            http,
+            engine,
+            base,
+            key,
+            model: model.trim().into(),
+            effort: settings.effort.get(engine),
+            auth,
+            deferred: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        }
     }
 
     pub fn wire(&self) -> Wire {
         self.engine.wire()
+    }
+
+    /// `tools` sent whole and constant, new ones surfaced mid-conversation: the cache and signed reasoning survive
+    /// a turn that needs more tools.
+    pub fn deferred_tools(&self) -> bool {
+        self.wire() == Wire::Anthropic
+            && anthropic::inline_tools(&self.model)
+            && self.deferred.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn disable_deferred(&self) {
+        self.deferred.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// A key is set (or a subscription is connected) and will only travel over TLS.
@@ -161,7 +194,7 @@ impl Llm {
                     .collect();
                 let token = self.authorization().await?;
                 let req = self.http.post(format!("{}/v1/messages/count_tokens", self.base)).timeout(Duration::from_secs(30));
-                let res = anthropic_headers(req.json(&shape), &token, self.auth.is_some())
+                let res = anthropic_headers(req.json(&shape), &token, self.auth.is_some(), anthropic::uses_deferred_tools(body))
                     .send()
                     .await
                     .with_context(|| format!("{} injoignable", self.engine.label()))?;
@@ -197,7 +230,7 @@ impl Llm {
         let url = if anthropic { format!("{}/v1/models?limit=1000", self.base) } else { format!("{}/models", self.base) };
         let token = self.authorization().await?;
         let req = self.http.get(&url).timeout(Duration::from_secs(10));
-        let req = if anthropic { anthropic_headers(req, &token, self.auth.is_some()) } else { req.bearer_auth(&token) };
+        let req = if anthropic { anthropic_headers(req, &token, self.auth.is_some(), false) } else { req.bearer_auth(&token) };
         let res = req.send().await.with_context(|| format!("{} injoignable", self.engine.label()))?;
         if !res.status().is_success() {
             bail!("HTTP {}", res.status());
@@ -299,7 +332,7 @@ impl Llm {
             let mut req = self.http.post(&url).json(body);
             req = match self.wire() {
                 Wire::OpenAi => req.bearer_auth(&token),
-                Wire::Anthropic => anthropic_headers(req, &token, self.auth.is_some()),
+                Wire::Anthropic => anthropic_headers(req, &token, self.auth.is_some(), anthropic::uses_deferred_tools(body)),
             };
             let res = req.send().await.with_context(|| format!("{} injoignable", self.engine.label()))?;
             let status = res.status();
@@ -347,13 +380,19 @@ fn model_entry(m: &Value) -> Option<Choice> {
     Some(Choice::new(id, name))
 }
 
-fn anthropic_headers(req: RequestBuilder, token: &str, oauth: bool) -> RequestBuilder {
+fn anthropic_headers(req: RequestBuilder, token: &str, oauth: bool, deferred: bool) -> RequestBuilder {
     let req = req.header("anthropic-version", claude::VERSION);
-    if oauth {
-        req.header("authorization", format!("Bearer {token}")).header("anthropic-beta", claude::BETA)
-    } else {
-        req.header("x-api-key", token)
-    }
+    let betas = match (oauth, deferred) {
+        (true, true) => Some(format!("{},{}", claude::BETA, anthropic::TOOL_CHANGES_BETA)),
+        (true, false) => Some(claude::BETA.to_owned()),
+        (false, true) => Some(anthropic::TOOL_CHANGES_BETA.to_owned()),
+        (false, false) => None,
+    };
+    let req = match betas {
+        Some(b) => req.header("anthropic-beta", b),
+        None => req,
+    };
+    if oauth { req.header("authorization", format!("Bearer {token}")) } else { req.header("x-api-key", token) }
 }
 
 /// One readable line out of any provider error body.

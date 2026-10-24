@@ -10,6 +10,22 @@ pub fn schemas(set: &BTreeSet<ToolKind>) -> Value {
     Value::Array(set.iter().map(|k| spec(*k)).collect())
 }
 
+/// Every tool, in canonical order; those outside `offered` are withheld (`defer_loading`) until a turn adds them.
+pub fn deferred(offered: &[ToolKind]) -> Value {
+    Value::Array(
+        ToolKind::ALL
+            .iter()
+            .map(|k| {
+                let mut s = spec(*k);
+                if !offered.contains(k) {
+                    s["defer_loading"] = Value::Bool(true);
+                }
+                s
+            })
+            .collect(),
+    )
+}
+
 type Param = (&'static str, &'static str, &'static str, bool);
 
 fn spec(kind: ToolKind) -> Value {

@@ -84,6 +84,8 @@ pub enum Event {
         conv: Uuid,
         route: Route,
         preamble: String,
+        /// Tools this turn surfaces mid-conversation (Claude deferred mode).
+        tools_added: Vec<ToolKind>,
         toolset: BTreeSet<ToolKind>,
         /// Claude reasoning replay boundary and the prefix fingerprint it was checked against.
         thinking_from: usize,

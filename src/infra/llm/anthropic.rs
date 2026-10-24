@@ -91,6 +91,19 @@ pub fn body(messages: &[Value], tools: Option<Value>, model: &str, effort: Effor
                 };
                 push(&mut out, "user", vec![block]);
             }
+            // Deferred tools surfaced at this point of the conversation (mid-conversation system message).
+            "tools" => {
+                let blocks: Vec<Value> = m["add"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(|name| json!({ "type": "tool_addition", "tool": { "type": "tool_reference", "name": name } }))
+                    .collect();
+                if !blocks.is_empty() {
+                    out.push(json!({ "role": "system", "content": blocks }));
+                }
+            }
             _ => {
                 pending.clear();
                 let blocks = user_blocks(&m["content"]);
@@ -109,8 +122,9 @@ pub fn body(messages: &[Value], tools: Option<Value>, model: &str, effort: Effor
     }
     let ephemeral = json!({ "type": "ephemeral" });
     let answer = out.iter().rposition(|m| m["role"] == "assistant");
-    let previous_end = answer.and_then(|a| out[..a].iter().rposition(|m| m["role"] == "user"));
-    for i in previous_end.into_iter().chain(out.len().checked_sub(1)) {
+    let previous_end = answer.and_then(|a| out[..a].iter().rposition(|m| m["role"] != "system"));
+    let last = out.iter().rposition(|m| m["role"] != "system");
+    for i in previous_end.into_iter().chain(last) {
         if let Some(block) = out[i]["content"].as_array_mut().and_then(|c| c.last_mut())
             && !matches!(block["type"].as_str(), Some("thinking" | "redacted_thinking"))
         {
@@ -260,11 +274,28 @@ fn arguments(raw: &Value) -> Value {
 }
 
 fn tool_schema(schema: &Value) -> Value {
-    json!({
+    let mut tool = json!({
         "name": schema["function"]["name"],
         "description": schema["function"]["description"],
         "input_schema": schema["function"]["parameters"],
-    })
+    });
+    if schema["defer_loading"] == true {
+        tool["defer_loading"] = json!(true);
+    }
+    tool
+}
+
+/// Beta that lets a request keep `tools` constant and surface deferred ones with `tool_addition`.
+pub const TOOL_CHANGES_BETA: &str = "inline-tools-2026-09-15";
+
+/// Mid-conversation tool changes exist from the 5 generation on (unknown ids are assumed recent).
+pub fn inline_tools(model: &str) -> bool {
+    matches!(thinking(model), Thinking::Adaptive { always_on: true, .. })
+}
+
+/// The request withholds some tools, so it needs the tool-changes beta.
+pub fn uses_deferred_tools(body: &Value) -> bool {
+    body["tools"].as_array().is_some_and(|t| t.iter().any(|x| x["defer_loading"] == true))
 }
 
 /// Prompt size counts cached reads and writes: `input_tokens` alone is only the uncached tail.

@@ -9,7 +9,7 @@ impl App {
     pub(super) fn pump(&mut self) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
-                Event::Routed { conv, route, preamble, toolset, thinking_from, prefix } => {
+                Event::Routed { conv, route, preamble, tools_added, toolset, thinking_from, prefix } => {
                     if let Some(c) = self.conv_mut(conv) {
                         c.toolset = toolset;
                         c.thinking_from = thinking_from;
@@ -17,6 +17,7 @@ impl App {
                         if let Some(m) = c.last_user_mut() {
                             m.route = Some(route);
                             m.preamble = preamble;
+                            m.tools_added = tools_added;
                         }
                     }
                 }

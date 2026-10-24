@@ -14,6 +14,7 @@ use crate::{
         playbook::Playbook,
         route::Route,
         skill::Skill,
+        tool::ToolKind,
     },
     tools::{fs, schema},
 };
@@ -83,8 +84,44 @@ pub fn request(conv: &Conversation, env: &Env, system: &str, replay: bool) -> Va
         let target = Target { parts: target.parts && i >= conv.thinking_from, ..target };
         wire(m, target)
     }));
-    let tools = (!conv.toolset.is_empty()).then(|| schema::schemas(&conv.toolset));
-    env.llm.body(&messages, tools)
+    if !env.llm.deferred_tools() {
+        let tools = (!conv.toolset.is_empty()).then(|| schema::schemas(&conv.toolset));
+        return env.llm.body(&messages, tools);
+    }
+    let messages = surface_additions(messages, &conv.messages[from..]);
+    env.llm.body(&messages, Some(schema::deferred(ToolKind::READ)))
+}
+
+/// Adds a `tools` entry (a `tool_addition` system message on the Claude wire) after each user message that added
+/// tools. Such a message must precede an assistant turn or end the request: an addition on an interrupted turn
+/// waits for the next user message. `visible` are the conversation messages ending `messages`.
+fn surface_additions(messages: Vec<Value>, visible: &[Message]) -> Vec<Value> {
+    let head = messages.len() - visible.len();
+    let mut out = Vec::with_capacity(messages.len() + 2);
+    let mut pending: Vec<ToolKind> = Vec::new();
+    for (k, v) in messages.into_iter().enumerate() {
+        out.push(v);
+        let Some(i) = k.checked_sub(head) else { continue };
+        let m = &visible[i];
+        for t in &m.tools_added {
+            if !pending.contains(t) {
+                pending.push(*t);
+            }
+        }
+        let next_is_answer = visible.get(i + 1).is_none_or(|n| n.role == Role::Assistant);
+        if m.role == Role::User && next_is_answer && !pending.is_empty() {
+            let add: Vec<&str> = pending.drain(..).map(ToolKind::name).collect();
+            out.push(json!({ "role": "tools", "add": add }));
+        }
+    }
+    out
+}
+
+/// Tools of the conversation that no visible user turn has offered yet (a summary hides earlier additions).
+/// Deferred mode only: the always-offered base is not counted.
+pub fn tool_additions(conv: &Conversation, from: usize) -> Vec<ToolKind> {
+    let offered: Vec<ToolKind> = conv.messages[from.min(conv.messages.len())..].iter().flat_map(|m| m.tools_added.iter().copied()).collect();
+    conv.toolset.iter().copied().filter(|k| !ToolKind::READ.contains(k) && !offered.contains(k)).collect()
 }
 
 fn wire(m: &Message, target: Target) -> Value {
@@ -235,5 +272,92 @@ mod tests {
         let call: crate::domain::chat::ToolCall =
             serde_json::from_str(r#"{"id":"c1","name":"grep","arguments":"{}","signature":"sig"}"#).expect("champ retiré toléré");
         assert_eq!(call.name, "grep");
+    }
+
+    fn env_for(engine: Engine, model: &str) -> Env {
+        use crate::domain::{auth::AuthMode, settings::Settings};
+        let settings = Settings {
+            engine,
+            claude_auth: AuthMode::ApiKey,
+            claude_key: "k".into(),
+            deepseek_key: "k".into(),
+            claude_model: model.into(),
+            ..Settings::default()
+        };
+        let web = std::sync::Arc::new(crate::tools::webindex::WebIndex::open(&std::env::temp_dir().join("omega-ctx-web")));
+        Env::new(settings, web).unwrap()
+    }
+
+    fn turn(added: &[ToolKind]) -> Conversation {
+        let mut conv = Conversation::default();
+        conv.toolset.extend(ToolKind::READ);
+        conv.toolset.extend(added);
+        conv.push(Message { tools_added: added.to_vec(), ..Message::user("cherche".into()) });
+        conv
+    }
+
+    #[test]
+    fn deferred_mode_keeps_the_tools_array_constant() {
+        let env = env_for(Engine::Claude, "claude-opus-5-5");
+        let (a, b) = (request(&turn(&[]), &env, "SYS", true), request(&turn(&[ToolKind::WebSearch]), &env, "SYS", true));
+        assert_eq!(a["tools"], b["tools"]);
+        let tools = a["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), ToolKind::ALL.len());
+        for t in tools {
+            let read = ToolKind::READ.iter().any(|k| t["name"] == k.name());
+            assert_eq!(t.get("defer_loading").is_some(), !read, "{}", t["name"]);
+        }
+    }
+
+    #[test]
+    fn a_turn_that_adds_tools_appends_a_tool_addition_message() {
+        let env = env_for(Engine::Claude, "claude-opus-5-5");
+        let body = request(&turn(&[ToolKind::WebSearch]), &env, "SYS", true);
+        let system = &body["messages"][1];
+        assert_eq!(system["role"], "system");
+        assert_eq!(system["content"][0]["type"], "tool_addition");
+        assert_eq!(system["content"][0]["tool"], json!({ "type": "tool_reference", "name": "web_search" }));
+    }
+
+    #[test]
+    fn an_interrupted_turn_hands_its_additions_to_the_next_one() {
+        let env = env_for(Engine::Claude, "claude-opus-5-5");
+        let mut conv = turn(&[ToolKind::WebSearch]);
+        conv.push(Message { tools_added: vec![ToolKind::Shell], ..Message::user("encore".into()) });
+        let body = request(&conv, &env, "SYS", true);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2, "user fusionné puis un seul message système");
+        let names: Vec<&str> = messages[1]["content"].as_array().unwrap().iter().filter_map(|b| b["tool"]["name"].as_str()).collect();
+        assert_eq!(names, ["web_search", "shell"]);
+    }
+
+    #[test]
+    fn openai_wire_and_older_claude_ignore_tool_additions() {
+        for env in [env_for(Engine::DeepSeek, "claude-opus-5-5"), env_for(Engine::Claude, "claude-sonnet-4-5")] {
+            let body = request(&turn(&[ToolKind::WebSearch]), &env, "SYS", true);
+            let text = body.to_string();
+            assert!(!text.contains("tool_addition") && !text.contains("defer_loading"), "{text:.300}");
+        }
+    }
+
+    #[test]
+    fn a_rejected_beta_falls_back_to_classic_tools() {
+        let env = env_for(Engine::Claude, "claude-opus-5-5");
+        assert!(crate::infra::llm::tools_beta_rejected(&anyhow::anyhow!("Claude 400 Bad Request: tool_reference_unresolved")));
+        assert!(!crate::infra::llm::tools_beta_rejected(&anyhow::anyhow!("Claude 401 Unauthorized: invalid x-api-key")));
+        env.llm.disable_deferred();
+        let body = request(&turn(&[ToolKind::WebSearch]), &env, "SYS", true);
+        assert!(!body.to_string().contains("defer_loading"));
+        assert_eq!(body["tools"].as_array().unwrap().len(), ToolKind::READ.len() + 1);
+    }
+
+    #[test]
+    fn additions_are_what_the_visible_history_has_not_offered_yet() {
+        let mut conv = turn(&[ToolKind::WebSearch]);
+        conv.push(Message::assistant("ok".into(), String::new(), Vec::new()));
+        conv.toolset.extend([ToolKind::WebSearch, ToolKind::Shell]);
+        conv.push(Message::user("et maintenant".into()));
+        assert_eq!(tool_additions(&conv, 0), [ToolKind::Shell]);
+        assert_eq!(tool_additions(&conv, 2), [ToolKind::Shell, ToolKind::WebSearch], "résumé : ré-offrir");
     }
 }

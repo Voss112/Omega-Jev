@@ -43,14 +43,17 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
         conv.messages[visible..].iter().rev().skip(1).filter_map(|m| m.route.as_ref()?.playbook.as_deref()).collect();
     let preamble = context::preamble(&route, &root, conv.user_turns() == 1, &loaded);
     conv.toolset.extend(route.tools());
+    let tools_added = if env.llm.deferred_tools() { context::tool_additions(conv, visible) } else { Vec::new() };
     if let Some(m) = conv.last_user_mut() {
         m.preamble.clone_from(&preamble);
         m.route = Some(route.clone());
+        m.tools_added.clone_from(&tools_added);
     }
     // Frozen for the whole turn: the tool loop then only appends, which Claude's signed reasoning requires.
     let system = prompts::system(&env.settings, &root);
     // A new system prompt or tool set voids the reasoning signed before it: drop it as a leading run, once.
-    let prefix = savings::prefix(&system, &conv.toolset);
+    // Deferred mode ships every tool on every request, so only the system prompt matters there.
+    let prefix = wire_prefix(env, &system, conv);
     if prefix != conv.prefix {
         conv.prefix = prefix;
         conv.thinking_from = conv.messages.len().saturating_sub(1);
@@ -59,6 +62,7 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
         conv: conv.id,
         route: route.clone(),
         preamble,
+        tools_added,
         toolset: conv.toolset.clone(),
         thinking_from: conv.thinking_from,
         prefix,
@@ -72,6 +76,13 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
     for _ in 0..env.settings.max_steps.max(1) {
         let body = context::request(conv, env, &system, true);
         let done = match complete(env, emit, conv.id, &body).await {
+            // Mid-conversation tool changes refused (model, account or beta): classic tools for the rest of the session.
+            Err(e) if llm::uses_deferred_tools(&body) && llm::tools_beta_rejected(&e) => {
+                env.llm.disable_deferred();
+                conv.prefix = wire_prefix(env, &system, conv);
+                conv.thinking_from = conv.messages.len();
+                complete(env, emit, conv.id, &context::request(conv, env, &system, false)).await?
+            }
             // Reasoning bound to an older state of the conversation: one retry without the reasoning blocks.
             Err(e) if llm::thinking_rejected(&e) => {
                 // Later steps of this turn keep only the reasoning they produce themselves.
@@ -97,6 +108,15 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
         run_tools(conv, &ctx, &calls).await;
     }
     bail!("Limite de {} étapes atteinte — envoyez « continue » pour poursuivre.", env.settings.max_steps)
+}
+
+/// What signed reasoning is bound to besides the history: the system prompt and the `tools` array actually sent.
+fn wire_prefix(env: &Env, system: &str, conv: &Conversation) -> u64 {
+    if env.llm.deferred_tools() {
+        savings::prefix(system, &ToolKind::ALL.into_iter().collect())
+    } else {
+        savings::prefix(system, &conv.toolset)
+    }
 }
 
 /// One streamed model call, deltas forwarded to the UI.

@@ -81,6 +81,9 @@ pub struct Message {
     /// Hidden orchestrator context sent before `content`; stored so the wire prefix stays cache-stable.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub preamble: String,
+    /// User messages, Claude deferred-tools mode: tools first offered at this turn (a `tool_addition` on the wire).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools_added: Vec<ToolKind>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reasoning: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -116,6 +119,7 @@ impl Message {
             content,
             images: Vec::new(),
             preamble: String::new(),
+            tools_added: Vec::new(),
             reasoning: String::new(),
             tool_calls: Vec::new(),
             parts: Vec::new(),

@@ -137,4 +137,16 @@ mod tests {
         assert!(detail.contains("15 playbooks Superpowers"), "{detail}");
         assert!(detail.contains("Audit sécurité"), "{detail}");
     }
+
+    /// Every probe with the saved settings: `cargo test -- --ignored health_live --nocapture`.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn health_live() {
+        let (settings, _) = crate::infra::store::load_settings();
+        let web = std::sync::Arc::new(crate::tools::webindex::WebIndex::open(&crate::infra::paths::web_cache()));
+        let env = super::Env::new(settings, web).unwrap();
+        for h in super::check(&env).await {
+            println!("[{}] {} · {} — {}", if h.ok { "OK" } else { "KO" }, h.group, h.name, h.detail);
+        }
+    }
 }

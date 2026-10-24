@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
 use reqwest::{Client, RequestBuilder, Url, header::CONTENT_TYPE};
 use scraper::{ElementRef, Html, Selector};
@@ -46,13 +46,29 @@ pub async fn search(ctx: &ToolCtx<'_>, query: &str) -> Result<String> {
 }
 
 async fn ddg(http: &Client, query: &str) -> Result<Vec<Hit>> {
-    let html = text(http.get("https://html.duckduckgo.com/html/").query(&[("q", query)])).await?;
-    let hits = parse_html(&html);
-    if !hits.is_empty() {
+    // The HTML endpoint rate-limits (403/202) by IP: any failure there falls back to the lite one.
+    let html = text(http.get("https://html.duckduckgo.com/html/").query(&[("q", query)])).await;
+    if let Ok(hits) = html.as_deref().map(parse_html)
+        && !hits.is_empty()
+    {
         return Ok(hits);
     }
-    let lite = text(http.get("https://lite.duckduckgo.com/lite/").query(&[("q", query)])).await?;
-    Ok(parse_lite(&lite))
+    let lite = text(http.get("https://lite.duckduckgo.com/lite/").query(&[("q", query)])).await;
+    match (lite, html) {
+        (Ok(page), _) => Ok(parse_lite(&page)),
+        (Err(e), _) if throttled(&e) => bail!(
+            "DuckDuckGo limite temporairement cette adresse IP (403/429). Utilise docs_search pour les pages déjà en cache, \
+             réessaie dans quelques minutes ou passe par un proxy (Paramètres → Confidentialité)."
+        ),
+        (Err(e), Err(first)) => Err(e.context(format!("html endpoint: {first:#}"))),
+        (Err(e), Ok(_)) => Err(e),
+    }
+}
+
+/// The search engine refused this client (rate limit or bot check), as opposed to a network failure.
+fn throttled(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}");
+    text.contains("403") || text.contains("429")
 }
 
 async fn text(req: RequestBuilder) -> Result<String> {
@@ -256,11 +272,56 @@ pub fn docs_search(index: &WebIndex, query: &str) -> String {
     format!("{UNTRUSTED}\n{}", body.join("\n\n"))
 }
 
+/// A real query: a HEAD answers 200 even when searches are refused.
 pub async fn probe(http: &Client) -> Result<String> {
-    http.head("https://html.duckduckgo.com/html/")
-        .timeout(Duration::from_secs(8))
-        .send()
-        .await
-        .context("DuckDuckGo injoignable")?;
-    Ok("DuckDuckGo, sans compte ni traçage".into())
+    let hits = ddg(http, "rust programming language").await.context("DuckDuckGo injoignable")?;
+    ensure!(!hits.is_empty(), "DuckDuckGo : 0 résultat (page de blocage ?)");
+    Ok(format!("DuckDuckGo, sans compte ni traçage · {} résultats", hits.len()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_throttled_search_is_reported_as_such() {
+        assert!(throttled(&anyhow::anyhow!("HTTP status client error (403 Forbidden) for url (https://html.duckduckgo.com/)")));
+        assert!(throttled(&anyhow::anyhow!("HTTP status client error (429 Too Many Requests) for url (x)")));
+        assert!(!throttled(&anyhow::anyhow!("web unreachable: dns error")));
+    }
+}
+
+#[cfg(test)]
+mod live {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        app::{Emitter, Env},
+        domain::settings::Settings,
+        tools::reads::Reads,
+    };
+
+    /// web_search → web_fetch → docs_search on a throwaway cache: `cargo test -- --ignored web_tools_live --nocapture`.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn web_tools_live() {
+        let dir = std::env::temp_dir().join(format!("omega-web-live-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let env = Env::new(Settings::default(), Arc::new(WebIndex::open(&dir))).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let emit = Emitter::new(tx, Arc::new(|| {}));
+        let reads = Reads::default();
+        let ctx = ToolCtx { env: &env, root: dir.clone(), emit: &emit, conv: uuid::Uuid::nil(), turn: 0, reads: &reads };
+        let found = search(&ctx, "tokio rust async runtime").await.unwrap();
+        println!("web_search: {}", clip(&found, 300));
+        assert!(found.starts_with("results["), "{found}");
+        let page = fetch(&ctx, "https://docs.rs/tokio/latest/tokio/", Some("runtime")).await.unwrap();
+        println!("web_fetch: {} car.", page.len());
+        assert!(page.contains(UNTRUSTED) && page.to_lowercase().contains("runtime"));
+        let local = docs_search(&env.web, "tokio runtime");
+        println!("docs_search: {}", clip(&local, 200));
+        assert!(local.contains("docs.rs/tokio"), "{local}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

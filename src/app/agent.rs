@@ -105,11 +105,7 @@ fn tuned(env: &Env, route: &Route) -> Option<Env> {
         return None;
     }
     let effort = route.effort_cap(env.llm.effort);
-    (effort != env.llm.effort).then(|| {
-        let mut llm = env.llm.clone();
-        llm.effort = effort;
-        env.with_llm(llm)
-    })
+    (effort != env.llm.effort).then(|| env.with_llm(env.llm.with_effort(effort)))
 }
 
 /// The tool loop: stream, run the calls, repeat until an answer without calls.

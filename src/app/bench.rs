@@ -3,11 +3,11 @@
 
 use std::{collections::BTreeSet, fmt::Write as _, time::Duration};
 
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
 
-use super::{Env, health::Health, prompts, router, savings};
+use super::{Env, context, health::Health, prompts, router, savings};
 use crate::{
     domain::{
         chat::{Conversation, Message, Usage},
@@ -93,6 +93,7 @@ pub async fn run(env: &Env) -> Vec<Health> {
     rows.push(row("RTK (tokens exacts)", rtk(&llm, &mut spent).await));
     rows.push(row("TOON vs JSON (tokens exacts)", toon(&llm, &mut spent).await));
     rows.push(row("Cache préfixe (2 requêtes réelles)", cache(env, &llm, &mut spent).await));
+    rows.push(row("Outils différés (tool_addition réel)", deferred(env, &llm, &mut spent).await));
     rows.push(row("Style de sortie (A/B réel)", style(env, &llm, &mut spent).await));
     let counting = if llm.wire() == Wire::Anthropic { "comptages count_tokens gratuits" } else { "comptages à 1 token de sortie" };
     rows.push(row(
@@ -228,6 +229,36 @@ async fn cache(env: &Env, llm: &Llm, spent: &mut u64) -> Result<String> {
         second.prompt,
         second.cached as f64 * 100.0 / second.prompt.max(1) as f64,
         billed * 100.0 / second.prompt.max(1) as f64
+    ))
+}
+
+/// Deferred tools: a second turn surfaces `web_search` with a `tool_addition`; `tools` stays byte-identical and the
+/// history written by the first request is read back from the cache.
+async fn deferred(env: &Env, llm: &Llm, spent: &mut u64) -> Result<String> {
+    if !llm.deferred_tools() {
+        return Ok(format!("{} : outils classiques (mode différé réservé à Claude 5+)", llm.model));
+    }
+    let env = env.with_llm(llm.clone());
+    let system = prompts::system(&env.settings, &env.workspace());
+    let ask = |body: &mut Value| body["max_tokens"] = json!(2048);
+    let mut conv = Conversation::default();
+    conv.toolset.extend(ToolKind::READ);
+    conv.push(Message::user("Health check: reply with the single word OK.".into()));
+    let mut first = context::request(&conv, &env, &system, true);
+    ask(&mut first);
+    let one = used(spent, &llm.stream(&first, |_| {}).await?);
+    conv.push(Message::assistant("OK".into(), String::new(), Vec::new()));
+    conv.toolset.insert(ToolKind::WebSearch);
+    conv.push(Message { tools_added: vec![ToolKind::WebSearch], ..Message::user("Again: reply OK.".into()) });
+    let mut second = context::request(&conv, &env, &system, true);
+    ask(&mut second);
+    ensure!(first["tools"] == second["tools"], "tableau tools modifié entre les tours");
+    let two = used(spent, &llm.stream(&second, |_| {}).await.context("tool_addition refusé par l'API")?);
+    ensure!(two.cached > 0, "2e tour : 0 token lu du cache sur {}", two.prompt);
+    let deferred = second["tools"].as_array().map_or(0, |t| t.iter().filter(|x| x["defer_loading"] == true).count());
+    Ok(format!(
+        "tools constant ({} différés) · web_search ajouté par tool_addition accepté · 2e tour {}/{} lus du cache (1er : {} écrits)",
+        deferred, two.cached, two.prompt, one.written
     ))
 }
 

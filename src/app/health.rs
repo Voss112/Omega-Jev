@@ -28,9 +28,10 @@ fn entry(group: &'static str, name: &'static str, result: Result<String>) -> Hea
 }
 
 pub async fn check(env: &Env) -> Vec<Health> {
-    let (deepseek, claude, jev, ddg, sh, apps) = tokio::join!(
+    let (deepseek, claude, gemini, jev, ddg, sh, apps) = tokio::join!(
         engine(env, Engine::DeepSeek),
         engine(env, Engine::Claude),
+        engine(env, Engine::Gemini),
         jev(env),
         web::probe(&env.http),
         shell::probe(),
@@ -60,7 +61,9 @@ pub async fn check(env: &Env) -> Vec<Health> {
     vec![
         entry("Moteurs IA", Engine::DeepSeek.label(), deepseek),
         entry("Moteurs IA", Engine::Claude.label(), claude),
+        entry("Moteurs IA", Engine::Gemini.label(), gemini),
         entry("Moteurs IA", "Jev System One", jev),
+        entry("Moteurs IA", "Délégation Flash", delegation(env)),
         entry("Code", "Tree-sitter AST", ts),
         entry("Code", "Graphe d'impact", gr),
         entry("Code", "Moteur ripgrep", rg),
@@ -73,12 +76,42 @@ pub async fn check(env: &Env) -> Vec<Health> {
         entry("Skills", "Superpowers (obra)", playbooks()),
         entry("Skills", RULES_CHECK, project_rules(env)),
         entry("Apps", "CLI-Anything (HKUDS)", apps),
+        entry("Apps", "Kits design & web", Ok(format!("{} kits · chargés par Jev à la demande", crate::tools::kits::KITS.len()))),
+        entry("Code", "Tests en continu", live_tests(env)),
+        entry("Code", "GitHub", github(env)),
         entry("Web", "Recherche anonyme", ddg),
         entry("Web", "Web local (BM25)", Ok(format!("{pages} pages en cache"))),
         entry("Sécurité", "Scanner statique", sec),
         entry("Sécurité", "Garde shell + sandbox", grd),
         entry("Sécurité", "Skill audit (Cloudflare)", audit_skill()),
     ]
+}
+
+/// The chain delegated work goes down (`Gemini Flash → DeepSeek Flash`), the main engine closing it.
+fn delegation(env: &Env) -> Result<String> {
+    if !env.settings.delegate {
+        return Ok("désactivée".to_owned());
+    }
+    anyhow::ensure!(!env.helpers.is_empty(), "aucun modèle Flash connecté (Gemini ou DeepSeek)");
+    let chain: Vec<String> = env.helpers.iter().map(|h| crate::domain::models::name(h.engine, &h.model)).collect();
+    Ok(format!("{} → moteur principal", chain.join(" → ")))
+}
+
+fn live_tests(env: &Env) -> Result<String> {
+    if !env.settings.live_tests {
+        return Ok("désactivés (⚙ Paramètres)".to_owned());
+    }
+    let plugin = crate::tools::livetest::detect(&env.workspace())
+        .ok_or_else(|| anyhow::anyhow!("aucun projet testable à la racine du dossier de travail"))?;
+    let watcher = plugin.watch.as_ref().map_or("watcher Omega", |w| w.command);
+    Ok(format!("{} · {watcher} (ou watcher Omega si absent)", plugin.name))
+}
+
+fn github(env: &Env) -> Result<String> {
+    let auth = crate::infra::auth::Auth::load(crate::domain::auth::Provider::GitHub)
+        .ok_or_else(|| anyhow::anyhow!("non connecté (⚙ Paramètres → GitHub)"))?;
+    let shared = if env.settings.github_shell { "git/gh du shell authentifiés" } else { "non partagé avec le shell" };
+    Ok(format!("{} · {shared}", auth.account()))
 }
 
 fn project_rules(env: &Env) -> Result<String> {

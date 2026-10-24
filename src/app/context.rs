@@ -63,6 +63,8 @@ struct Target {
     parts: bool,
     /// DeepSeek: `reasoning_content` of earlier answers.
     reasoning: bool,
+    /// Gemini: thought signatures of tool calls, in the wire's own field.
+    signatures: Option<Wire>,
 }
 
 /// `system` is built once per turn (`prompts::system`): a prompt that changes mid-turn (date, rules file)
@@ -72,6 +74,7 @@ pub fn request(conv: &Conversation, env: &Env, system: &str, replay: bool) -> Va
         vision: env.llm.engine.vision(),
         parts: replay && env.llm.wire() == Wire::Anthropic,
         reasoning: env.llm.engine == Engine::DeepSeek,
+        signatures: (env.llm.engine == Engine::Gemini).then(|| env.llm.wire()),
     };
     let mut messages = vec![json!({ "role": "system", "content": system })];
     let from = conv.summary.as_ref().map_or(0, |s| {
@@ -124,6 +127,9 @@ pub fn tool_additions(conv: &Conversation, from: usize) -> Vec<ToolKind> {
     conv.toolset.iter().copied().filter(|k| !ToolKind::READ.contains(k) && !offered.contains(k)).collect()
 }
 
+/// Google's placeholder for a function call that has no thought signature of its own.
+const GEMINI_NO_SIGNATURE: &str = "skip_thought_signature_validator";
+
 fn wire(m: &Message, target: Target) -> Value {
     match m.role {
         Role::User => {
@@ -154,7 +160,21 @@ fn wire(m: &Message, target: Target) -> Value {
                 v["tool_calls"] = m
                     .tool_calls
                     .iter()
-                    .map(|c| json!({ "id": c.id, "type": "function", "function": { "name": c.name, "arguments": c.arguments } }))
+                    .map(|c| {
+                        let mut call =
+                            json!({ "id": c.id, "type": "function", "function": { "name": c.name, "arguments": c.arguments } });
+                        if let Some(wire) = target.signatures {
+                            // Calls written by another engine carry no signature: Gemini 3 accepts this documented
+                            // placeholder instead of rejecting the whole history.
+                            let sig = if c.signature.is_empty() { GEMINI_NO_SIGNATURE } else { c.signature.as_str() };
+                            if wire == Wire::Gemini {
+                                call["signature"] = json!(sig);
+                            } else {
+                                call["extra_content"] = json!({ "google": { "thought_signature": sig } });
+                            }
+                        }
+                        call
+                    })
                     .collect();
             }
             if target.parts && !m.parts.is_empty() {
@@ -187,6 +207,8 @@ mod tests {
             playbook: Some("security-audit".into()),
             effort: None,
             simple: 0.0,
+            routine: 0.0,
+            design: 0.0,
         }
     }
 
@@ -243,7 +265,7 @@ mod tests {
         let env = Env::new(settings, web).unwrap();
         let mut conv = Conversation::default();
         conv.push(Message::user("cherche".into()));
-        let call = ToolCall { id: "toolu_1".into(), name: "grep".into(), arguments: "{}".into() };
+        let call = ToolCall { id: "toolu_1".into(), name: "grep".into(), arguments: "{}".into(), ..ToolCall::default() };
         let parts = vec![Part::Thinking { thinking: String::new(), signature: "sig".into() }, Part::ToolUse { call: 0 }];
         conv.push(Message { parts, ..Message::assistant(String::new(), String::new(), vec![call]) });
         conv.push(Message::tool("toolu_1".into(), "1 hit".into()));
@@ -258,7 +280,7 @@ mod tests {
     #[test]
     fn provider_specific_fields_only_reach_the_provider_that_reads_them() {
         use crate::domain::chat::{Part, ToolCall};
-        let call = ToolCall { id: "c1".into(), name: "grep".into(), arguments: "{}".into() };
+        let call = ToolCall { id: "c1".into(), name: "grep".into(), arguments: "{}".into(), ..ToolCall::default() };
         let m = Message {
             parts: vec![Part::Thinking { thinking: String::new(), signature: "s".into() }, Part::ToolUse { call: 0 }],
             ..Message::assistant("ok".into(), "pensée".into(), vec![call])
@@ -268,6 +290,21 @@ mod tests {
         let all = wire(&m, Target { parts: true, reasoning: true, ..Target::default() });
         assert_eq!(all["parts"][0]["type"], "thinking");
         assert_eq!(all["reasoning_content"], "pensée");
+    }
+
+    #[test]
+    fn gemini_gets_its_signatures_and_others_never_see_them() {
+        use crate::domain::chat::ToolCall;
+        let signed = ToolCall { id: "c1".into(), name: "grep".into(), arguments: "{}".into(), signature: "s".into() };
+        let foreign = ToolCall { id: "toolu_2".into(), name: "grep".into(), arguments: "{}".into(), ..ToolCall::default() };
+        let m = Message::assistant(String::new(), String::new(), vec![signed, foreign]);
+        let code_assist = wire(&m, Target { signatures: Some(Wire::Gemini), ..Target::default() });
+        assert_eq!(code_assist["tool_calls"][0]["signature"], "s");
+        assert_eq!(code_assist["tool_calls"][1]["signature"], GEMINI_NO_SIGNATURE);
+        let key = wire(&m, Target { signatures: Some(Wire::OpenAi), ..Target::default() });
+        assert_eq!(key["tool_calls"][0]["extra_content"]["google"]["thought_signature"], "s");
+        let other = wire(&m, Target::default()).to_string();
+        assert!(!other.contains("signature") && !other.contains("extra_content"));
     }
 
     #[test]

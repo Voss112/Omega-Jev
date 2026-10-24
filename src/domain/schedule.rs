@@ -22,15 +22,51 @@ pub struct Job {
     #[serde(default)]
     pub model: String,
     pub effort: Effort,
+    /// Kept but not fired until resumed.
+    #[serde(default)]
+    pub paused: bool,
+    /// One-shot job that already ran (kept in the Tasks tab with its conversation).
+    #[serde(default)]
+    pub done: bool,
+    /// Latest runs, newest last (at most `RUNS_KEPT`).
+    #[serde(default)]
+    pub runs: Vec<Run>,
 }
+
+/// One execution of a job: when, and the conversation it opened.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Run {
+    pub at: DateTime<Utc>,
+    pub conv: Uuid,
+}
+
+const RUNS_KEPT: usize = 10;
 
 impl Job {
     pub fn new(prompt: String, at: DateTime<Utc>, daily: bool, engine: Engine, model: String, effort: Effort) -> Self {
-        Self { id: Uuid::new_v4(), prompt, at, daily, engine, model, effort }
+        Self { id: Uuid::new_v4(), prompt, at, daily, engine, model, effort, paused: false, done: false, runs: Vec::new() }
     }
 
     pub fn due(&self, now: DateTime<Utc>) -> bool {
-        self.at <= now
+        !self.paused && !self.done && self.at <= now
+    }
+
+    /// Records a run; a one-shot job is then done, a daily one moves to its next occurrence.
+    pub fn ran(&mut self, conv: Uuid, now: DateTime<Utc>) {
+        self.runs.push(Run { at: now, conv });
+        if self.runs.len() > RUNS_KEPT {
+            self.runs.remove(0);
+        }
+        if self.daily {
+            self.advance(now);
+        } else {
+            self.done = true;
+        }
+    }
+
+    /// Still waiting for its next run.
+    pub fn pending(&self) -> bool {
+        !self.done
     }
 
     /// Daily jobs move to their next occurrence at the same local time, across DST changes;
@@ -105,6 +141,24 @@ mod tests {
         job.advance(first + Duration::days(3) - Duration::hours(2));
         let local = job.at.with_timezone(&Local);
         assert_eq!(local.format("%Y-%m-%d %H:%M").to_string(), "2026-10-27 08:30");
+    }
+
+    #[test]
+    fn runs_are_recorded_and_one_shots_finish() {
+        let mut once = Job::new("x".into(), at(24, 8), false, Engine::Claude, String::new(), Effort::Max);
+        let conv = Uuid::new_v4();
+        once.ran(conv, at(24, 9));
+        assert!(once.done && !once.due(at(30, 0)), "une fois : terminée, jamais relancée");
+        assert_eq!(once.runs.last().map(|r| r.conv), Some(conv));
+        let mut daily = Job::new("y".into(), at(24, 8), true, Engine::Claude, String::new(), Effort::Max);
+        for _ in 0..12 {
+            daily.ran(Uuid::new_v4(), daily.at);
+        }
+        assert!(!daily.done && daily.runs.len() == 10, "historique borné");
+        daily.paused = true;
+        assert!(!daily.due(daily.at + Duration::days(2)), "en pause : jamais déclenchée");
+        let old: Job = serde_json::from_str(&serde_json::to_string(&Job::new("z".into(), at(24, 8), false, Engine::Claude, String::new(), Effort::Low)).unwrap().replace(",\"paused\":false,\"done\":false,\"runs\":[]", "")).unwrap();
+        assert!(!old.paused && !old.done && old.runs.is_empty(), "ancien fichier relu");
     }
 
     #[test]

@@ -78,8 +78,29 @@ where
                 }
                 data.samples.lock().unwrap_or_else(PoisonError::into_inner).extend(mono);
             },
-            move |e| *failed.error.lock().unwrap_or_else(PoisonError::into_inner) = Some(e.to_string()),
+            move |e: cpal::Error| {
+                if fatal(e.kind()) {
+                    *failed.error.lock().unwrap_or_else(PoisonError::into_inner) = Some(e.to_string());
+                }
+            },
             None,
         )
         .context("ouverture du micro")
+}
+
+/// A glitch (WASAPI data discontinuity under load), a reroute or a refused real-time priority leaves the stream
+/// running: only the loss of the device or of the stream ends the dictation.
+fn fatal(kind: cpal::ErrorKind) -> bool {
+    !matches!(kind, cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::RealtimeDenied)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_buffer_glitch_does_not_stop_the_dictation() {
+        assert!(!super::fatal(cpal::ErrorKind::Xrun));
+        assert!(!super::fatal(cpal::ErrorKind::DeviceChanged));
+        assert!(super::fatal(cpal::ErrorKind::DeviceNotAvailable));
+        assert!(super::fatal(cpal::ErrorKind::StreamInvalidated));
+    }
 }

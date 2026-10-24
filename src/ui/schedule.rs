@@ -25,9 +25,26 @@ pub struct Draft {
     pub engine: Engine,
     pub model: String,
     pub effort: Effort,
+    /// Job being modified from the Tasks tab (its run history is kept).
+    pub editing: Option<uuid::Uuid>,
 }
 
 impl Draft {
+    /// The form filled with an existing job, to modify it.
+    pub fn of(job: &Job) -> Self {
+        let local = job.at.with_timezone(&Local);
+        Self {
+            prompt: job.prompt.clone(),
+            date: local.format("%Y-%m-%d").to_string(),
+            time: local.format("%H:%M").to_string(),
+            daily: job.daily,
+            engine: job.engine,
+            model: job.model.clone(),
+            effort: job.effort,
+            editing: Some(job.id),
+        }
+    }
+
     pub fn new(prompt: String, engine: Engine, model: String, effort: Effort) -> Self {
         let tomorrow = Local::now() + Duration::days(1);
         Self {
@@ -38,6 +55,7 @@ impl Draft {
             engine,
             model,
             effort,
+            editing: None,
         }
     }
 }
@@ -125,10 +143,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             });
             ui.add_space(8.0);
             widgets::chip_icon(ui, Some(Icon::Unlock), "Bypass forcé", AMBER);
-            if !app.jobs.is_empty() {
+            if app.jobs.iter().any(Job::pending) {
                 widgets::form_section(ui, Icon::Clock, "Programmés");
                 ScrollArea::vertical().max_height(170.0).show(ui, |ui| {
-                    for (i, job) in app.jobs.iter().enumerate() {
+                    for (i, job) in app.jobs.iter().enumerate().filter(|(_, j)| j.pending()) {
                         widgets::card(ui, EDGE, |ui| {
                             ui.set_width(ui.available_width());
                             ui.horizontal(|ui| {
@@ -183,16 +201,22 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Ok(_) if draft.prompt.trim().is_empty() => app.schedule_error = Some("prompt vide".to_owned()),
             Ok(at) => {
                 app.schedule_error = None;
-                app.jobs.push(Job::new(
-                    draft.prompt.trim().to_owned(),
-                    at,
-                    draft.daily,
-                    draft.engine,
-                    draft.model.clone(),
-                    draft.effort,
-                ));
+                let mut job =
+                    Job::new(draft.prompt.trim().to_owned(), at, draft.daily, draft.engine, draft.model.clone(), draft.effort);
+                match draft.editing.and_then(|id| app.jobs.iter_mut().find(|j| j.id == id)) {
+                    Some(old) => {
+                        // Same task, new schedule: id and history stay, a finished one-shot becomes pending again.
+                        job.id = old.id;
+                        job.runs = std::mem::take(&mut old.runs);
+                        *old = job;
+                        app.notify("Tâche modifiée");
+                    }
+                    None => {
+                        app.jobs.push(job);
+                        app.notify("Prompt programmé — Omega doit rester ouvert");
+                    }
+                }
                 app.persist_jobs();
-                app.notify("Prompt programmé — Omega doit rester ouvert");
                 planned = true;
             }
             Err(e) => app.schedule_error = Some(e),
@@ -203,7 +227,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
     if cancel {
         // The prompt came from the composer: closing without scheduling gives it back.
-        if app.draft.trim().is_empty() {
+        if draft.editing.is_none() && app.draft.trim().is_empty() {
             app.draft = draft.prompt;
         }
     } else {

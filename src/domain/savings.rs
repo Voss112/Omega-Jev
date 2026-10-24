@@ -31,6 +31,8 @@ impl Rates {
                 Self { read, write: 1.25 }
             }
             Engine::DeepSeek => Self { read: 0.1, write: 1.0 },
+            // Gemini implicit caching: hits at 1/4 of the input price, no write premium.
+            Engine::Gemini => Self { read: 0.25, write: 1.0 },
         }
     }
 }

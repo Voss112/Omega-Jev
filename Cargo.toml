@@ -1,6 +1,6 @@
 [package]
 name = "omega"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 description = "Omega — agent IA local et anonyme : Jev (System One) route, DeepSeek V4.1 Flash ou Claude (System Two) exécute"
 license = "MIT"
@@ -10,6 +10,8 @@ publish = false
 # UI
 eframe = "0.37"
 egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark", "better_syntax_highlighting"] }
+# Coloration du code dans l'explorateur de fichiers (déjà tiré par egui_commonmark : rien de plus à compiler)
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 # Repérage des tableaux markdown (même version qu'egui_commonmark : rien de plus à compiler)
 pulldown-cmark = { version = "0.13", default-features = false }
 rfd = "0.17"
@@ -23,7 +25,7 @@ cpal = "0.18"
 whisper-rs = { path = "vendor/whisper-rs", features = ["vulkan"] }
 
 # Runtime & réseau
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "net"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "stream", "socks", "gzip", "brotli", "http2", "charset", "query", "form"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures-util = "0.3"

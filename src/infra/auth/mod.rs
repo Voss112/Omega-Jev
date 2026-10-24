@@ -15,6 +15,8 @@ use crate::{
 };
 
 pub mod claude;
+pub mod gemini;
+pub mod github;
 pub mod pkce;
 
 /// A token is refreshed this many seconds before it expires, so a request never races expiry.
@@ -48,7 +50,8 @@ pub fn read_from(dir: &Path, provider: Provider) -> Option<Cred> {
 /// Serialises refreshes per provider across every handle (chat, health checks, usage, model list):
 /// providers rotate refresh tokens, so two parallel refreshes with the same token burn the session.
 fn gate(provider: Provider) -> &'static tokio::sync::Mutex<()> {
-    static GATES: [tokio::sync::Mutex<()>; Provider::ALL.len()] = [tokio::sync::Mutex::const_new(())];
+    static GATES: [tokio::sync::Mutex<()>; Provider::ALL.len()] =
+        [const { tokio::sync::Mutex::const_new(()) }; Provider::ALL.len()];
     &GATES[provider as usize]
 }
 
@@ -76,12 +79,23 @@ impl Auth {
         self.lock().account.clone()
     }
 
+    pub fn project(&self) -> String {
+        self.lock().project.clone()
+    }
+
     pub fn cred(&self) -> Cred {
         self.lock().clone()
     }
 
     pub fn replace(&self, cred: Cred) {
         *self.lock() = cred;
+    }
+
+    /// Persists `cred` on disk, then in memory.
+    pub fn save(&self, cred: Cred) -> Result<()> {
+        write_to(&self.dir, self.provider, &cred)?;
+        self.replace(cred);
+        Ok(())
     }
 
     pub fn needs_refresh(&self, now: i64) -> bool {
@@ -113,7 +127,8 @@ impl Auth {
         }
         let renewed = refresh(http, self.provider, &current).await?;
         let account = if renewed.account.is_empty() { current.account } else { renewed.account };
-        let cred = Cred { account, ..renewed };
+        let project = if renewed.project.is_empty() { current.project } else { renewed.project };
+        let cred = Cred { account, project, ..renewed };
         // Memory first: the previous refresh token is spent, it must never be used again even if the disk write fails.
         self.replace(cred.clone());
         write_to(&self.dir, self.provider, &cred)?;
@@ -129,6 +144,8 @@ impl Auth {
 pub async fn refresh(http: &Client, provider: Provider, cred: &Cred) -> Result<Cred> {
     match provider {
         Provider::Claude => claude::refresh(http, cred).await,
+        Provider::Gemini => gemini::refresh(http, cred).await,
+        Provider::GitHub => bail!("GitHub : jeton refusé — reconnectez-vous dans ⚙ Paramètres."),
     }
 }
 
@@ -155,7 +172,7 @@ mod tests {
     use crate::domain::auth::{Cred, Provider};
 
     fn cred(expires_at: i64) -> Cred {
-        Cred { access: "a".into(), refresh: "r".into(), expires_at, account: String::new() }
+        Cred { access: "a".into(), refresh: "r".into(), expires_at, ..Cred::default() }
     }
 
     #[test]
@@ -169,7 +186,7 @@ mod tests {
     fn cred_round_trips_through_the_sealed_file() {
         let dir = std::env::temp_dir().join("omega-creds-roundtrip");
         let _ = std::fs::remove_dir_all(&dir);
-        let cred = Cred { access: "at-123".into(), refresh: "rt-456".into(), expires_at: 42, account: "me@x".into() };
+        let cred = Cred { access: "at-123".into(), refresh: "rt-456".into(), expires_at: 42, account: "me@x".into(), ..Cred::default() };
         super::write_to(&dir, Provider::Claude, &cred).unwrap();
         let raw = std::fs::read_to_string(dir.join("claude.json")).unwrap();
         assert!(!raw.contains("at-123") && !raw.contains("rt-456"), "jeton en clair sur disque");

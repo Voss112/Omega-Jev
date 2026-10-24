@@ -118,6 +118,14 @@ fn spec(kind: ToolKind) -> Value {
              Writes .omega/skills/security-audit/ only; never touches findings.json.",
             &[],
         ),
+        ToolKind::Kits => (
+            "Curated external kits; you decide if one helps. design: canvas-ui, paper-shaders, motion-primitives, ui-layouts, \n             cursify, design-taste, better-design, superdesign. web: scrapling (pages that block fetch), agent-reach \n             (YouTube, Reddit, GitHub, Bilibili…). Flow: list → info (read usage) → install (user-approved).",
+            &[
+                ("action", "string", "list | info | install", true),
+                ("name", "string", "Kit name from list", false),
+                ("component", "string", "install: component id when the kit asks for one (e.g. liquid, text-effect)", false),
+            ],
+        ),
     };
     let desc = if kind == ToolKind::Shell { shell_desc.as_str() } else { desc };
     let props: Map<String, Value> = params

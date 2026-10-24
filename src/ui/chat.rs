@@ -98,6 +98,14 @@ fn top_bar(app: &mut App, ui: &mut Ui) {
     {
         app.show_panel = !app.show_panel;
     }
+    let pending = app.jobs.iter().filter(|j| j.pending() && !j.paused).count();
+    let tasks = if pending > 0 { format!("Tâches ({pending})") } else { "Tâches".to_owned() };
+    if widgets::pill(&mut right, Some(Icon::Clock), &tasks, MUTED, app.show_tasks)
+        .on_hover_text("Toutes les tâches programmées (/tasks)")
+        .clicked()
+    {
+        app.show_tasks = !app.show_tasks;
+    }
     if widgets::pill(&mut right, Some(Icon::PanelLeft), "Fichiers", MUTED, app.files.show)
         .on_hover_text("Arborescence du dossier de travail")
         .clicked()

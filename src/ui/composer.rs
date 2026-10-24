@@ -199,12 +199,13 @@ fn editing_banner(ui: &mut Ui) -> bool {
 
 /// Keyboard hints under the box; trailing items drop out when the column is narrow.
 fn hints(ui: &mut Ui, style: &str) {
-    let items: [(&str, &str); 5] = [
+    let items: [(&str, &str); 6] = [
         ("Entrée", "envoyer"),
         ("Maj+Entrée", "nouvelle ligne"),
         ("Ctrl+M", "dicter"),
         ("Ctrl+N", "nouvelle discussion"),
         ("Échap", "stop"),
+        ("/clear", "vider le contexte"),
     ];
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
     let font = FontId::proportional(11.0);

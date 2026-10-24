@@ -19,6 +19,9 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+    /// Gemini thought signature of this call, replayed verbatim (Gemini 3 rejects calls without it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub signature: String,
 }
 
 /// One block of a Claude answer, in stream order. A tool loop must replay them unchanged:
@@ -330,7 +333,7 @@ mod tests {
     fn repair_answers_dangling_tool_calls() {
         let mut conv = Conversation::default();
         conv.push(Message::user("hi".into()));
-        let call = ToolCall { id: "c1".into(), name: "grep".into(), arguments: "{}".into() };
+        let call = ToolCall { id: "c1".into(), name: "grep".into(), arguments: "{}".into(), ..ToolCall::default() };
         conv.push(Message::assistant(String::new(), String::new(), vec![call]));
         conv.repair();
         assert_eq!(conv.messages.last().and_then(|m| m.tool_call_id.as_deref()), Some("c1"));

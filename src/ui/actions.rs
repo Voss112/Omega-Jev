@@ -24,6 +24,8 @@ fn probed(s: &Settings) -> Settings {
         engine: Engine::default(),
         effort: Efforts::default(),
         max_steps: 0,
+        unlimited_steps: false,
+        auto_model: false,
         auto_approve: false,
         bypass: false,
         confirm_edits: false,
@@ -63,6 +65,9 @@ impl App {
 
     pub(super) fn send(&mut self) {
         let text = self.draft.trim().to_owned();
+        if self.slash_command(&text) {
+            return;
+        }
         if (text.is_empty() && self.shots.is_empty()) || self.busy() {
             return;
         }
@@ -97,6 +102,29 @@ impl App {
         conv.push(if images.is_empty() { Message::user(text) } else { Message::user_with(text, images) });
         self.draft.clear();
         self.launch(id);
+    }
+
+    /// Composer commands handled locally, never sent to a model. `true` when `text` was one.
+    fn slash_command(&mut self, text: &str) -> bool {
+        match text {
+            // Like Claude Code: a fresh, empty context. The previous conversation stays in the history.
+            "/clear" | "/new" => {
+                if self.busy() {
+                    self.notify("Arrêtez le tour en cours avant /clear");
+                    return true;
+                }
+                self.new_chat();
+                self.shots.clear();
+                self.notify("Contexte vidé : nouvelle discussion (l'ancienne reste dans l'historique)");
+                true
+            }
+            "/tasks" | "/taches" | "/tâches" => {
+                self.draft.clear();
+                self.show_tasks = true;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Re-runs the last turn from its user message, restoring the files it changed first.
@@ -212,6 +240,10 @@ impl App {
         // Engine, effort or bypass switches do not re-run the network self-tests (token refreshes, paid probes).
         let probes = probed(&self.settings) != probed(&settings);
         let vpn = (&self.settings.proxy, self.settings.ip_lookup) != (&settings.proxy, settings.ip_lookup);
+        // Watchers belong to one workspace and only run while the option is on.
+        if !settings.live_tests || settings.workspace != self.settings.workspace {
+            crate::tools::livetest::stop_all();
+        }
         self.settings = settings;
         self.env = env;
         if let Some(n) = notice {
@@ -228,11 +260,63 @@ impl App {
     /// Opens the provider page and starts the OAuth dance.
     pub(super) fn connect(&mut self, provider: Provider) {
         self.settings_draft = None;
-        let (url, login) = match provider {
-            Provider::Claude => crate::app::login::claude_start(),
-        };
-        let _ = open::that(&url);
-        self.login = Some(login);
+        self.cancel_login();
+        let (env, emit) = (self.env.clone(), self.emit.clone());
+        match provider {
+            Provider::Claude => {
+                let (url, login) = crate::app::login::claude_start();
+                let _ = open::that(&url);
+                self.login = Some(login);
+            }
+            Provider::Gemini => match crate::app::login::gemini_start() {
+                Ok((url, login)) => {
+                    let _ = open::that(&url);
+                    let waiting = login.clone();
+                    self.login_task = Some(self.spawn(async move {
+                        let result = crate::app::login::await_gemini(&env.http, &waiting).await;
+                        emit.send(Event::Connected { provider, result: result.map_err(|e| format!("{e:#}")) });
+                    }));
+                    self.login = Some(login);
+                }
+                Err(e) => self.notify(format!("Gemini : {e:#}")),
+            },
+            Provider::GitHub => {
+                self.login = Some(crate::app::login::github_start());
+                self.login_task = Some(self.spawn(async move {
+                    let result = async {
+                        let device = crate::infra::auth::github::start(&env.http).await?;
+                        let _ = open::that(&device.verification_uri);
+                        emit.send(Event::DeviceCode { code: device.user_code.clone(), url: device.verification_uri.clone() });
+                        crate::infra::auth::github::wait(&env.http, &device).await
+                    }
+                    .await;
+                    emit.send(Event::Connected { provider, result: result.map_err(|e| format!("{e:#}")) });
+                }));
+            }
+        }
+    }
+
+    /// A pasted GitHub token (`ghp_…`, `github_pat_…`), checked against the API before it is kept.
+    pub(super) fn use_github_token(&mut self) {
+        let token = std::mem::take(&mut self.github_draft);
+        let (env, emit) = (self.env.clone(), self.emit.clone());
+        self.spawn(async move {
+            let result = crate::infra::auth::github::import_token(&env.http, &token).await;
+            emit.send(Event::Connected { provider: Provider::GitHub, result: result.map_err(|e| format!("{e:#}")) });
+        });
+    }
+
+    pub(super) fn disconnect(&mut self, provider: Provider) {
+        match crate::app::login::forget(provider) {
+            Ok(()) => {
+                self.reload_accounts();
+                self.plan_usage.remove(&provider);
+                // The environment re-reads the credentials: a removed token stops reaching requests and shells.
+                self.apply_settings(self.settings.clone());
+                self.notify(format!("{} déconnecté", provider.label()));
+            }
+            Err(e) => self.notify(format!("Déconnexion impossible : {e:#}")),
+        }
     }
 
     /// Exchanges the code the user pasted from the provider page.
@@ -251,8 +335,12 @@ impl App {
         });
     }
 
+    /// Closes the modal and stops whatever waits for the provider (loopback listener, device polling).
     pub(super) fn cancel_login(&mut self) {
         self.login = None;
+        if let Some(task) = self.login_task.take() {
+            task.abort();
+        }
     }
 
     /// Imports the session the official Claude Code CLI already logged in.
@@ -276,11 +364,14 @@ impl App {
                     self.notify(format!("Jetons non enregistrés : {e:#}"));
                     return;
                 }
-                let subscribe = |s: &mut Settings| {
-                    match provider {
-                        Provider::Claude => s.claude_auth = AuthMode::Subscription,
+                let subscribe = |s: &mut Settings| match provider {
+                    // Claude becomes the engine at once; Gemini first serves delegation, the main engine stays.
+                    Provider::Claude => {
+                        s.claude_auth = AuthMode::Subscription;
+                        s.engine = Engine::Claude;
                     }
-                    s.engine = provider.engine();
+                    Provider::Gemini => s.gemini_auth = AuthMode::Subscription,
+                    Provider::GitHub => {}
                 };
                 let mut settings = self.settings.clone();
                 subscribe(&mut settings);
@@ -288,18 +379,23 @@ impl App {
                 if let Some(draft) = &mut self.settings_draft {
                     subscribe(draft);
                 }
+                // Always rebuilt: the environment re-reads the new credentials (shell token, Code Assist project).
                 self.apply_settings(settings);
                 self.reload_accounts();
-                self.refresh_models(provider.engine());
-                self.login = None;
-                let account = if cred.account.is_empty() { provider.label().to_owned() } else { cred.account.clone() };
-                self.notify(format!("{} connecté · {account}", provider.label()));
-                if provider == Provider::Claude {
-                    self.fetch_plan_usage();
+                if let Some(engine) = provider.engine() {
+                    self.refresh_models(engine);
                 }
+                self.cancel_login();
+                let account = if cred.account.is_empty() { provider.label().to_owned() } else { cred.account.clone() };
+                let note = match provider {
+                    Provider::Gemini if self.settings.engine != Engine::Gemini => " — délégation active, moteur sélectionnable",
+                    _ => "",
+                };
+                self.notify(format!("{} connecté · {account}{note}", provider.label()));
+                self.fetch_plan_usage(provider);
             }
             Err(e) => {
-                if let Some(login) = &mut self.login {
+                if let Some(login) = self.login.as_mut().filter(|l| l.provider == provider) {
                     login.submitting = false;
                     login.status = e;
                 } else {
@@ -310,13 +406,18 @@ impl App {
     }
 
     /// Best-effort: any failure silently leaves the usage section hidden.
-    fn fetch_plan_usage(&mut self) {
+    pub(super) fn fetch_plan_usage(&mut self, provider: Provider) {
         let (env, emit) = (self.env.clone(), self.emit.clone());
         let _task = self.spawn(async move {
-            let Some(auth) = crate::infra::auth::Auth::load(Provider::Claude) else { return };
+            let Some(auth) = crate::infra::auth::Auth::load(provider) else { return };
             let Ok(token) = auth.fresh(&env.http).await else { return };
-            if let Some(windows) = crate::infra::auth::claude::usage(&env.http, &token).await {
-                emit.send(Event::PlanUsage { provider: Provider::Claude, windows });
+            let windows = match provider {
+                Provider::Claude => crate::infra::auth::claude::usage(&env.http, &token).await,
+                Provider::Gemini => crate::infra::auth::gemini::usage(&env.http, &token, &auth.project()).await,
+                Provider::GitHub => None,
+            };
+            if let Some(windows) = windows {
+                emit.send(Event::PlanUsage { provider, windows });
             }
         });
     }
@@ -423,7 +524,7 @@ impl App {
                 }
             };
             let helper = async {
-                if let Some(helper) = &env.helper {
+                if let Some(helper) = env.helpers.first() {
                     helper.warm().await;
                 }
             };
@@ -470,32 +571,47 @@ impl App {
             return;
         }
         let now = chrono::Utc::now();
-        let due: Vec<Job> = self.jobs.iter().filter(|j| j.due(now)).cloned().collect();
+        let due: Vec<Uuid> = self.jobs.iter().filter(|j| j.due(now)).map(|j| j.id).collect();
         if due.is_empty() {
             return;
         }
-        self.jobs.retain_mut(|j| {
-            if j.due(now) {
-                if j.daily {
-                    j.advance(now);
-                    return true;
-                }
-                return false;
-            }
-            true
-        });
+        for id in due {
+            self.run_job(id, now);
+        }
         self.persist_jobs();
-        for job in due {
-            self.run_job(job);
+    }
+
+    /// Tasks tab "Lancer maintenant": runs the job once without moving its schedule.
+    pub(super) fn run_job_now(&mut self, id: Uuid) {
+        let Some(job) = self.jobs.iter().find(|j| j.id == id).cloned() else { return };
+        if let Some(conv) = self.start_job(&job) {
+            if let Some(j) = self.jobs.iter_mut().find(|j| j.id == id) {
+                j.runs.push(crate::domain::schedule::Run { at: chrono::Utc::now(), conv });
+            }
+            self.persist_jobs();
+        }
+    }
+
+    /// Fires a due job and records the run (one-shot: done; daily: next occurrence).
+    fn run_job(&mut self, id: Uuid, now: chrono::DateTime<chrono::Utc>) {
+        let Some(job) = self.jobs.iter().find(|j| j.id == id).cloned() else { return };
+        let conv = self.start_job(&job);
+        if let Some(j) = self.jobs.iter_mut().find(|j| j.id == id) {
+            match conv {
+                Some(conv) => j.ran(conv, now),
+                // Not launched (VPN kill-switch): a daily job still moves on, a one-shot one waits for the next frame.
+                None if j.daily => j.advance(now),
+                None => j.paused = true,
+            }
         }
     }
 
     /// A job runs with its own engine, model and effort, in bypass, through an environment of its own:
-    /// the user's settings, draft, images and open conversation are left untouched.
-    fn run_job(&mut self, job: Job) {
+    /// the user's settings, draft, images and open conversation are left untouched. Returns the conversation.
+    fn start_job(&mut self, job: &Job) -> Option<Uuid> {
         if self.settings.require_vpn && !self.vpn.as_ref().is_some_and(|v| v.active) {
-            self.notify("Kill-switch VPN : tâche programmée non lancée (aucun VPN détecté).");
-            return;
+            self.notify("Kill-switch VPN : tâche programmée non lancée (aucun VPN détecté) — mise en pause.");
+            return None;
         }
         let mut settings = self.settings.clone();
         settings.engine = job.engine;
@@ -508,10 +624,11 @@ impl App {
         let (env, _) = build_env(&settings, &self.web);
         let mut conv = Conversation::default();
         let id = conv.id;
-        conv.push(Message::user(job.prompt));
+        conv.push(Message::user(job.prompt.clone()));
         self.convs.insert(0, conv);
         self.launch_with(id, env);
         self.notify("Tâche programmée lancée (bypass)");
+        Some(id)
     }
 }
 

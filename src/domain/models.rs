@@ -37,12 +37,19 @@ const CLAUDE: &[Model] = &[
     Model { id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
 ];
 const DEEPSEEK: &[Model] = &[Model { id: "deepseek-flash", name: "DeepSeek V4.1 Flash" }];
+const GEMINI: &[Model] = &[
+    Model { id: "gemini-3.8-pro", name: "Gemini 3.8 Pro" },
+    Model { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+    Model { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+    Model { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+];
 
 /// Offline fallback for `engine`; the account list fetched at runtime takes precedence.
 pub fn suggested(engine: Engine) -> &'static [Model] {
     match engine {
         Engine::DeepSeek => DEEPSEEK,
         Engine::Claude => CLAUDE,
+        Engine::Gemini => GEMINI,
     }
 }
 

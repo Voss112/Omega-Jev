@@ -77,16 +77,33 @@ pub struct Settings {
     pub claude_url: String,
     pub claude_model: String,
     pub claude_auth: AuthMode,
+    pub gemini_key: String,
+    /// OpenAI-compatible endpoint of Gemini API keys (a subscription uses Code Assist).
+    pub gemini_url: String,
+    pub gemini_model: String,
+    pub gemini_auth: AuthMode,
+    /// Fast Gemini model that takes delegated work.
+    pub gemini_flash_model: String,
     /// Effort chosen per engine: the ceiling Jev's estimate may lower (never raise).
     pub effort: Efforts,
     /// Jev lowers the effort of easy turns (below the user's choice, when it keeps the cache).
     pub auto_effort: bool,
-    /// Simple questions and conversation summaries go to DeepSeek Flash instead of the main engine.
+    /// Simple questions and conversation summaries go to a Flash model instead of the main engine.
     pub delegate: bool,
+    /// Gemini Flash takes delegated work first; DeepSeek Flash only when Gemini is unavailable or out of quota.
+    pub delegate_gemini: bool,
+    /// Tests (unit, integration, end-to-end) and code comments are delegated too.
+    pub delegate_routine: bool,
+    /// Claude: Jev picks Haiku, Sonnet or the chosen model per turn from the difficulty (never above the choice).
+    pub auto_model: bool,
+    /// The project's tests run in a watcher while the agent codes; the agent no longer runs them itself.
+    pub live_tests: bool,
     pub style: Style,
     /// Dictation language (ISO 639-1) or `auto`; a fixed language is faster and more accurate on short phrases.
     pub dictation_language: String,
     pub max_steps: u32,
+    /// No step limit per turn (long unattended runs).
+    pub unlimited_steps: bool,
     pub auto_approve: bool,
     /// Bypass permissions: every approval is auto-granted (hard-blocked commands stay blocked).
     pub bypass: bool,
@@ -99,6 +116,8 @@ pub struct Settings {
     pub proxy: String,
     pub require_vpn: bool,
     pub ip_lookup: bool,
+    /// The connected GitHub account authenticates `git` and `gh` in the agent's shell.
+    pub github_shell: bool,
     pub workspace: Option<PathBuf>,
 }
 
@@ -116,12 +135,22 @@ impl Default for Settings {
             claude_url: "https://api.anthropic.com".into(),
             claude_model: "claude-sonnet-4-5".into(),
             claude_auth: AuthMode::Subscription,
+            gemini_key: String::new(),
+            gemini_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
+            gemini_model: "gemini-3.8-pro".into(),
+            gemini_auth: AuthMode::Subscription,
+            gemini_flash_model: "gemini-3.8-flash".into(),
             effort: Efforts::default(),
             auto_effort: true,
             delegate: true,
+            delegate_gemini: true,
+            delegate_routine: true,
+            auto_model: true,
+            live_tests: false,
             style: Style::default(),
             dictation_language: "fr".into(),
             max_steps: 64,
+            unlimited_steps: false,
             auto_approve: true,
             bypass: false,
             confirm_edits: false,
@@ -131,6 +160,7 @@ impl Default for Settings {
             require_vpn: false,
             // Off by default: no third party learns the exit IP unless the user opts in.
             ip_lookup: false,
+            github_shell: true,
             workspace: None,
         }
     }
@@ -143,6 +173,7 @@ impl Settings {
         match engine {
             Engine::DeepSeek => (&self.deepseek_url, &self.deepseek_key, model),
             Engine::Claude => (&self.claude_url, &self.claude_key, model),
+            Engine::Gemini => (&self.gemini_url, &self.gemini_key, model),
         }
     }
 
@@ -151,6 +182,7 @@ impl Settings {
         match engine {
             Engine::DeepSeek => &self.deepseek_model,
             Engine::Claude => &self.claude_model,
+            Engine::Gemini => &self.gemini_model,
         }
     }
 
@@ -159,6 +191,7 @@ impl Settings {
         let slot = match engine {
             Engine::DeepSeek => &mut self.deepseek_model,
             Engine::Claude => &mut self.claude_model,
+            Engine::Gemini => &mut self.gemini_model,
         };
         slot.clear();
         slot.push_str(id.trim());
@@ -169,7 +202,13 @@ impl Settings {
         match engine {
             Engine::DeepSeek => AuthMode::ApiKey,
             Engine::Claude => self.claude_auth,
+            Engine::Gemini => self.gemini_auth,
         }
+    }
+
+    /// Step budget of one turn; `None` = unlimited.
+    pub fn step_limit(&self) -> Option<u32> {
+        (!self.unlimited_steps).then_some(self.max_steps.max(1))
     }
 }
 
@@ -200,8 +239,16 @@ max_steps = 24
         let kimi: Settings =
             toml::from_str("engine = \"kimi\"\nkimi_key = \"x\"\n[effort]\nkimi = \"high\"\n").expect("kimi retiré");
         assert_eq!(kimi.engine, Engine::DeepSeek);
-        let gemini: Settings = toml::from_str("engine = \"gemini\"\ngemini_auth = \"api_key\"\n").expect("gemini retiré");
-        assert_eq!(gemini.engine, Engine::Claude);
+        let gemini: Settings = toml::from_str("engine = \"gemini\"\ngemini_auth = \"api_key\"\n").expect("gemini revenu");
+        assert_eq!((gemini.engine, gemini.gemini_auth), (Engine::Gemini, AuthMode::ApiKey));
+    }
+
+    #[test]
+    fn unlimited_steps_lift_the_limit() {
+        let s = Settings::default();
+        assert_eq!(s.step_limit(), Some(64));
+        assert_eq!(Settings { unlimited_steps: true, ..s.clone() }.step_limit(), None);
+        assert_eq!(Settings { max_steps: 0, ..s }.step_limit(), Some(1));
     }
 
     #[test]
@@ -210,6 +257,8 @@ max_steps = 24
         assert_eq!(s.endpoint(Engine::Claude).0, "https://api.anthropic.com");
         assert_eq!(s.auth_mode(Engine::DeepSeek), AuthMode::ApiKey);
         assert_eq!(s.auth_mode(Engine::Claude), AuthMode::Subscription);
+        assert_eq!(s.auth_mode(Engine::Gemini), AuthMode::Subscription);
+        assert_eq!(s.endpoint(Engine::Gemini).2, "gemini-3.8-pro");
     }
 
     #[test]

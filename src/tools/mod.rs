@@ -10,6 +10,8 @@ pub mod diagnostics;
 pub mod fs;
 pub mod graph;
 pub mod guard;
+pub mod kits;
+pub mod livetest;
 pub mod reads;
 pub mod rtk;
 pub mod schema;
@@ -148,6 +150,12 @@ async fn exec(ctx: &ToolCtx<'_>, kind: ToolKind, a: Args<'_>) -> Result<ToolOutp
             }
             blocking(move || audit::install(&root)).await
         }
+        ToolKind::Kits => match a.str("action")?.as_str() {
+            "list" => Ok(kits::list(a.opt("category").as_deref())),
+            "info" => kits::info(&a.str("name")?),
+            "install" => kits::install(ctx, &a.str("name")?, a.opt("component").as_deref()).await,
+            other => Err(anyhow!("unknown action `{other}` (list|info|install)")),
+        },
     };
     text.map(ToolOutput::from)
 }

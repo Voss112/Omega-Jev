@@ -123,6 +123,18 @@ pub(super) async fn ask_jev(jev: &Jev, input: &Input) -> Result<(Route, u64)> {
             "simple".to_owned(),
             Question::noul("Simple chat or factual question answerable without tools, files or deep reasoning?"),
         ),
+        (
+            "routine".to_owned(),
+            Question::noul(
+                "Mainly routine work a fast model does as well: writing or running tests (unit, integration, end-to-end), adding code comments or docstrings, or summarizing?",
+            ),
+        ),
+        (
+            "design".to_owned(),
+            Question::noul(
+                "Visual or UI design work: layouts, components, styling, animations, shaders, landing pages, design systems?",
+            ),
+        ),
     ];
     let a = jev.ask(state, &questions).await?;
     let (skill, confidence) = a.choice("skill").and_then(|(id, c)| Some((Skill::parse(&id)?, c))).context("skill")?;
@@ -138,6 +150,8 @@ pub(super) async fn ask_jev(jev: &Jev, input: &Input) -> Result<(Route, u64)> {
         playbook: a.choice("playbook").map(|(id, _)| id).filter(|id| Playbook::find(id).is_some()),
         effort: a.score("effort"),
         simple: a.noul("simple").unwrap_or(0.0),
+        routine: a.noul("routine").unwrap_or(0.0),
+        design: a.noul("design").unwrap_or(0.0),
     };
     Ok((route, a.tokens))
 }
@@ -212,6 +226,42 @@ const APP_WORDS: &[&str] = &[
     "logiciel",
 ];
 
+/// Routine work (local fallback for the Jev `routine` question).
+const ROUTINE_WORDS: &[&str] = &[
+    "test unitaire",
+    "tests unitaires",
+    "unit test",
+    "e2e",
+    "end-to-end",
+    "end to end",
+    "test d'intégration",
+    "tests d'intégration",
+    "integration test",
+    "commente",
+    "commentaire",
+    "docstring",
+    "résume",
+    "resume",
+    "summarize",
+];
+
+/// Visual design work (local fallback for the Jev `design` question).
+const DESIGN_WORDS: &[&str] = &[
+    "design",
+    "ui ",
+    "interface",
+    "landing",
+    "css",
+    "tailwind",
+    "animation",
+    "shader",
+    "composant visuel",
+    "maquette",
+    "mockup",
+    "curseur",
+    "cursor effect",
+];
+
 pub fn local(query: &str) -> Route {
     let q = query.to_lowercase();
     let hits = |words: &[&str]| words.iter().filter(|w| q.contains(*w)).count();
@@ -236,6 +286,8 @@ pub fn local(query: &str) -> Route {
         playbook: skill.default_playbook().map(str::to_owned),
         effort: None,
         simple: 0.0,
+        routine: flag(ROUTINE_WORDS.iter().any(|w| q.contains(w))),
+        design: flag(DESIGN_WORDS.iter().any(|w| q.contains(w))),
     }
 }
 
@@ -257,6 +309,13 @@ mod tests {
         let input = Input::of(&conversation("Continue."));
         assert_eq!(input.query, "Continue.");
         assert_eq!(input.follow_up().map(|r| r.skill), Some(Skill::Security));
+    }
+
+    #[test]
+    fn local_routing_spots_routine_and_design_work() {
+        assert!(local("écris les tests unitaires du parser").routine_task());
+        assert!(local("ajoute une animation shader sur la landing page").needs_design());
+        assert!(!local("corrige le bug d'auth").routine_task());
     }
 
     #[test]

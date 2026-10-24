@@ -10,4 +10,5 @@ pub mod savings;
 pub mod schedule;
 pub mod settings;
 pub mod skill;
+pub mod tier;
 pub mod tool;

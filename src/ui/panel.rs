@@ -10,7 +10,10 @@ use super::{
 };
 use crate::{
     app::health,
-    domain::{auth::AuthMode, models},
+    domain::{
+        auth::{AuthMode, Provider},
+        models,
+    },
 };
 
 pub fn show(app: &mut App, ui: &mut Ui) {
@@ -32,6 +35,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     ui.add_space(4.0);
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         tools(app, ui);
+        live_tests(app, ui);
         engine(app, ui);
         network(app, ui);
         economy(app, ui);
@@ -39,6 +43,38 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         verdict(app, ui);
         ui.add_space(16.0);
     });
+}
+
+/// Background test watcher of the workspace: plugin, native or built-in, last verdict.
+fn live_tests(app: &App, ui: &mut Ui) {
+    if !app.settings.live_tests {
+        return;
+    }
+    heading(ui, "Tests en continu");
+    let Some(status) = crate::tools::livetest::current(&app.env.workspace()).map(|r| r.status()) else {
+        row(ui, true, "En attente", "démarre au premier tour qui touche au code");
+        return;
+    };
+    let how = match status.mode {
+        crate::tools::livetest::Mode::Native => "watcher natif",
+        crate::tools::livetest::Mode::Builtin => "watcher Omega",
+    };
+    let (ok, detail) = match (&status.error, &status.last, status.running) {
+        (Some(e), _, _) => (false, e.clone()),
+        (None, _, true) => (true, format!("{how} · exécution en cours…")),
+        (None, Some(last), false) => {
+            let ago = last.finished.elapsed().as_secs();
+            (last.ok, format!("{how} · {} il y a {ago} s", if last.ok { "vert" } else { "échec" }))
+        }
+        (None, None, false) => (true, format!("{how} · pas encore de résultat")),
+    };
+    row(ui, ok, status.plugin, &detail);
+    if let Some(hint) = status.hint {
+        ui.label(widgets::text(format!("Watcher natif plus rapide : {hint}"), 10.5, FAINT));
+    }
+    if let Some(last) = status.last.as_ref().filter(|l| !l.ok) {
+        ui.label(widgets::text(crate::tools::compress::clip(&last.summary, 600), 10.5, FAINT));
+    }
 }
 
 fn heading(ui: &mut Ui, text: &str) {
@@ -236,8 +272,8 @@ fn subscription(app: &App, ui: &mut Ui) {
             );
             widgets::truncated(ui, &label, FontId::proportional(12.5), if connected { GREEN } else { MUTED });
         });
-        let usage = app.plan_usage.as_ref().filter(|(p, _, _)| p.engine() == app.settings.engine);
-        if let Some((_, windows, at)) = usage {
+        let usage = Provider::of(app.settings.engine).and_then(|p| app.plan_usage.get(&p));
+        if let Some((windows, at)) = usage {
             ui.add_space(6.0);
             for w in windows {
                 let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());

@@ -8,6 +8,7 @@ mod composer;
 mod dictation;
 mod events;
 mod files;
+mod highlight;
 mod fx;
 mod icons;
 mod login;
@@ -18,6 +19,7 @@ mod savings;
 mod schedule;
 mod settings;
 mod sidebar;
+mod tasks;
 mod theme;
 mod widgets;
 mod window;
@@ -105,10 +107,14 @@ pub struct App {
     settings_draft: Option<Settings>,
     /// In-flight OAuth dance, if any.
     login: Option<crate::app::login::Login>,
+    /// Background half of a login (loopback listener, device polling), aborted on cancel.
+    login_task: Option<JoinHandle<()>>,
+    /// GitHub token typed by the user (`ghp_…`, `github_pat_…`).
+    github_draft: String,
     /// Long-lived Claude token typed by the user (`claude setup-token`).
     token_draft: String,
-    /// Last fetched plan usage of a subscription.
-    plan_usage: Option<(Provider, Vec<Window>, Instant)>,
+    /// Last fetched plan usage per subscription.
+    plan_usage: HashMap<Provider, (Vec<Window>, Instant)>,
     /// Connected account per subscription, read once (decrypting credentials every frame is wasteful).
     accounts: HashMap<Provider, String>,
     show_panel: bool,
@@ -121,6 +127,10 @@ pub struct App {
     files: files::Files,
     /// Prompts programmés (toujours en bypass).
     jobs: Vec<crate::domain::schedule::Job>,
+    /// Tasks tab shown in place of the conversation.
+    show_tasks: bool,
+    /// Task whose delete button was clicked once (awaiting confirmation).
+    task_delete_armed: Option<(Uuid, Instant)>,
     schedule_draft: Option<schedule::Draft>,
     schedule_error: Option<String>,
     /// Screenshots waiting in the composer.
@@ -174,8 +184,10 @@ impl App {
             delete_armed: None,
             settings_draft: None,
             login: None,
+            login_task: None,
+            github_draft: String::new(),
             token_draft: String::new(),
-            plan_usage: None,
+            plan_usage: HashMap::new(),
             accounts: HashMap::new(),
             show_panel: true,
             focus_composer: true,
@@ -184,6 +196,8 @@ impl App {
             heights: HashMap::new(),
             files: files::Files::default(),
             jobs: store::load_jobs(),
+            show_tasks: false,
+            task_delete_armed: None,
             schedule_draft: None,
             schedule_error: None,
             shots: Vec::new(),
@@ -199,6 +213,10 @@ impl App {
             app.notify(n);
         }
         app.reload_accounts();
+        let connected: Vec<Provider> = Provider::ENGINES.into_iter().filter(|p| app.accounts.contains_key(p)).collect();
+        for provider in connected {
+            app.fetch_plan_usage(provider);
+        }
         // First launch, or nothing to run with. A missing Jev key is optional (local routing, chip in the top bar).
         if !app.env.llm.configured() || !paths::settings().exists() {
             app.settings_draft = Some(app.settings.clone());
@@ -282,6 +300,8 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        // Test watchers live outside the runtime: their process trees are killed before Omega exits.
+        crate::tools::livetest::stop_all();
         if let Some(rt) = self.rt.take() {
             rt.shutdown_background();
         }
@@ -366,7 +386,9 @@ impl eframe::App for App {
         let central = CentralPanel::default()
             .frame(Frame::new().inner_margin(Margin::symmetric(22, 0)))
             .show(ui, |ui| {
-                if files::tabs(self, ui) {
+                if self.show_tasks {
+                    tasks::view(self, ui);
+                } else if files::tabs(self, ui) {
                     files::viewer(self, ui);
                 } else {
                     chat::show(self, ui);

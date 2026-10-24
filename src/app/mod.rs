@@ -44,8 +44,9 @@ pub struct Env {
     pub settings: Settings,
     pub http: Client,
     pub llm: Llm,
-    /// DeepSeek Flash for delegated work (simple turns, summaries) while another engine is active.
-    pub helper: Option<Llm>,
+    /// Flash models for delegated work (simple turns, tests, comments, summaries), in order of preference:
+    /// Gemini Flash, then DeepSeek Flash. Empty when delegation is off.
+    pub helpers: Vec<Llm>,
     pub jev: Option<Jev>,
     pub web: Arc<WebIndex>,
 }
@@ -54,16 +55,14 @@ impl Env {
     pub fn new(settings: Settings, web: Arc<WebIndex>) -> Result<Self> {
         let http = http::client(&settings.proxy)?;
         let llm = Llm::new(http.clone(), &settings, settings.engine);
-        let helper = (settings.delegate && settings.engine != Engine::DeepSeek)
-            .then(|| Llm::new(http.clone(), &settings, Engine::DeepSeek))
-            .filter(Llm::configured);
+        let helpers = helpers(&http, &settings, &llm);
         let jev_key = if settings.jev_key.trim().is_empty() {
             std::env::var("TYPESAFE_API_KEY").unwrap_or_default()
         } else {
             settings.jev_key.trim().to_owned()
         };
         let jev = Jev::new(http.clone(), &settings.jev_url, &jev_key, &settings.jev_model);
-        Ok(Self { settings, http, llm, helper, jev, web })
+        Ok(Self { settings, http, llm, helpers, jev, web })
     }
 
     /// Same environment, another engine (a delegated turn, or the effort Jev picked).
@@ -72,20 +71,37 @@ impl Env {
             settings: self.settings.clone(),
             http: self.http.clone(),
             llm,
-            helper: None,
+            helpers: Vec::new(),
             jev: self.jev.clone(),
             web: self.web.clone(),
         }
     }
 
-    /// The engine that writes conversation summaries.
-    pub fn summarizer(&self) -> &Llm {
-        self.helper.as_ref().unwrap_or(&self.llm)
+    /// Engines that may write a conversation summary, cheapest first; the main engine closes the list.
+    pub fn summarizers(&self) -> impl Iterator<Item = &Llm> {
+        self.helpers.iter().filter(|h| !h.cooling()).chain(std::iter::once(&self.llm))
     }
 
     pub fn workspace(&self) -> PathBuf {
         self.settings.workspace.clone().filter(|p| p.is_dir()).unwrap_or_else(paths::workspace)
     }
+}
+
+/// Delegation chain: Gemini Flash (when preferred and connected), then DeepSeek Flash. A helper that is the
+/// main engine itself is skipped: delegating to it would only change nothing.
+fn helpers(http: &Client, settings: &Settings, main: &Llm) -> Vec<Llm> {
+    if !settings.delegate {
+        return Vec::new();
+    }
+    let gemini = settings
+        .delegate_gemini
+        .then(|| Llm::new(http.clone(), settings, Engine::Gemini).with_model(&settings.gemini_flash_model));
+    let deepseek = Some(Llm::new(http.clone(), settings, Engine::DeepSeek));
+    [gemini, deepseek]
+        .into_iter()
+        .flatten()
+        .filter(|h| h.configured() && !h.model.is_empty() && !(h.engine == main.engine && h.model == main.model))
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -158,6 +174,11 @@ pub enum Event {
     Done {
         conv: Uuid,
         error: Option<String>,
+    },
+    /// GitHub device flow: the code to type on the verification page.
+    DeviceCode {
+        code: String,
+        url: String,
     },
     /// A subscription finished (or failed) its OAuth dance.
     Connected {

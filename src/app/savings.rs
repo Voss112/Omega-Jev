@@ -128,7 +128,7 @@ pub fn prefix_self_test(web: &std::sync::Arc<WebIndex>) -> Result<String> {
         let mut conv = Conversation::default();
         conv.toolset.extend(ToolKind::READ);
         conv.push(Message::user("cherche run".into()));
-        let call = ToolCall { id: "toolu_1".into(), name: "grep".into(), arguments: r#"{"pattern":"run"}"#.into() };
+        let call = ToolCall { id: "toolu_1".into(), name: "grep".into(), arguments: r#"{"pattern":"run"}"#.into(), ..ToolCall::default() };
         let parts = vec![Part::Thinking { thinking: String::new(), signature: "sig".into() }, Part::ToolUse { call: 0 }];
         conv.push(Message { parts, ..Message::assistant(String::new(), "r".into(), vec![call]) });
         conv.push(Message::tool("toolu_1".into(), "x".repeat(5000)));

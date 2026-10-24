@@ -65,6 +65,11 @@ pub fn command(cmd: &str, raw: &str) -> String {
     out
 }
 
+/// Terminal colour and cursor codes removed (watchers' live output).
+pub fn strip_ansi(text: &str) -> String {
+    ANSI.replace_all(text, "").into_owned()
+}
+
 fn filter(clean: &str) -> String {
     let lines: Vec<&str> = clean
         .lines()

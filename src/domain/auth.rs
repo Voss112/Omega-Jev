@@ -14,27 +14,42 @@ pub enum AuthMode {
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     Claude,
+    Gemini,
+    /// Not an engine: git and `gh` credentials for the agent's shell.
+    GitHub,
 }
 
 impl Provider {
-    pub const ALL: [Provider; 1] = [Self::Claude];
+    pub const ALL: [Provider; 3] = [Self::Claude, Self::Gemini, Self::GitHub];
+    /// Providers that run a System Two engine.
+    pub const ENGINES: [Provider; 2] = [Self::Claude, Self::Gemini];
 
     pub fn id(self) -> &'static str {
         match self {
             Self::Claude => "claude",
+            Self::Gemini => "gemini",
+            Self::GitHub => "github",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Claude => "Claude",
+            Self::Gemini => "Gemini",
+            Self::GitHub => "GitHub",
         }
     }
 
-    pub fn engine(self) -> crate::domain::engine::Engine {
+    pub fn engine(self) -> Option<crate::domain::engine::Engine> {
         match self {
-            Self::Claude => crate::domain::engine::Engine::Claude,
+            Self::Claude => Some(crate::domain::engine::Engine::Claude),
+            Self::Gemini => Some(crate::domain::engine::Engine::Gemini),
+            Self::GitHub => None,
         }
+    }
+
+    pub fn of(engine: crate::domain::engine::Engine) -> Option<Self> {
+        Self::ENGINES.into_iter().find(|p| p.engine() == Some(engine))
     }
 }
 
@@ -48,6 +63,8 @@ pub struct Cred {
     pub expires_at: i64,
     /// Account label shown in the UI (email, plan or tier).
     pub account: String,
+    /// Gemini Code Assist project id (empty for other providers).
+    pub project: String,
 }
 
 /// Tokens never reach a log, a panic message or a debug print.
@@ -58,6 +75,7 @@ impl std::fmt::Debug for Cred {
             .field("refresh", &"<scellé>")
             .field("expires_at", &self.expires_at)
             .field("account", &self.account)
+            .field("project", &self.project)
             .finish()
     }
 }
@@ -85,8 +103,12 @@ mod tests {
 
     #[test]
     fn subscription_providers_map_to_their_engine() {
-        assert_eq!(Provider::ALL, [Provider::Claude]);
-        assert_eq!(Provider::Claude.engine(), crate::domain::engine::Engine::Claude);
+        use crate::domain::engine::Engine;
+        assert_eq!(Provider::Claude.engine(), Some(Engine::Claude));
+        assert_eq!(Provider::Gemini.engine(), Some(Engine::Gemini));
+        assert_eq!(Provider::GitHub.engine(), None);
+        assert_eq!(Provider::of(Engine::Gemini), Some(Provider::Gemini));
+        assert_eq!(Provider::of(Engine::DeepSeek), None);
         assert_eq!(Provider::Claude.id(), "claude");
     }
 }

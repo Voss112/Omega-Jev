@@ -32,6 +32,8 @@ enum SubAction {
     Connect(Provider),
     Import,
     UseToken,
+    GitHubToken,
+    Disconnect(Provider),
 }
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
@@ -53,7 +55,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             ui.add_space(6.0);
             ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
                 ui.set_width(ui.available_width() - 8.0);
-                sub = form(ui, draft, &mut app.token_draft, &app.accounts);
+                sub = form(ui, draft, &mut app.token_draft, &mut app.github_draft, &app.accounts);
                 bench = super::savings::section(ui, &app.convs, app.bench.as_deref(), app.bench_running);
                 ui.add_space(4.0);
             });
@@ -106,11 +108,19 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         }
         Some(SubAction::Import) => app.import_claude(),
         Some(SubAction::UseToken) => app.use_token(),
+        Some(SubAction::GitHubToken) => app.use_github_token(),
+        Some(SubAction::Disconnect(provider)) => app.disconnect(provider),
         None => {}
     }
 }
 
-fn form(ui: &mut Ui, s: &mut Settings, token: &mut String, accounts: &HashMap<Provider, String>) -> Option<SubAction> {
+fn form(
+    ui: &mut Ui,
+    s: &mut Settings,
+    token: &mut String,
+    github: &mut String,
+    accounts: &HashMap<Provider, String>,
+) -> Option<SubAction> {
     let mut sub = None;
     widgets::form_section(ui, Icon::Star, "Abonnements");
     ui.label(
@@ -120,7 +130,7 @@ fn form(ui: &mut Ui, s: &mut Settings, token: &mut String, accounts: &HashMap<Pr
         .size(12.0)
         .color(MUTED),
     );
-    for provider in Provider::ALL {
+    for provider in Provider::ENGINES {
         ui.add_space(8.0);
         widgets::card(ui, EDGE, |ui| {
             ui.set_width(ui.available_width());
@@ -165,7 +175,8 @@ fn form(ui: &mut Ui, s: &mut Settings, token: &mut String, accounts: &HashMap<Pr
                 }
                 ui.label(label("Mode"));
                 let mut mode = match provider {
-                    Provider::Claude => s.claude_auth,
+                    Provider::Gemini => s.gemini_auth,
+                    _ => s.claude_auth,
                 };
                 let text = |m: AuthMode| match m {
                     AuthMode::Subscription => "Abonnement",
@@ -185,16 +196,19 @@ fn form(ui: &mut Ui, s: &mut Settings, token: &mut String, accounts: &HashMap<Pr
                     },
                 );
                 match provider {
-                    Provider::Claude => s.claude_auth = mode,
+                    Provider::Gemini => s.gemini_auth = mode,
+                    _ => s.claude_auth = mode,
                 }
                 ui.end_row();
             });
         });
     }
+    sub = github_section(ui, s, github, accounts.get(&Provider::GitHub)).or(sub);
     widgets::form_section(ui, Icon::Key, "Clés API");
     card_grid(ui, "keys", |ui| {
         secret(ui, "DeepSeek", &mut s.deepseek_key, "sk-…  (platform.deepseek.com)");
         secret(ui, "Claude (API)", &mut s.claude_key, "sk-ant-… (platform.claude.com) — inutile en abonnement");
+        secret(ui, "Gemini (API)", &mut s.gemini_key, "AIza… (aistudio.google.com) — inutile en abonnement");
         secret(ui, "Jev (TypeSafe)", &mut s.jev_key, "console.typesafe.ai — requis pour le routage Jev");
     });
     widgets::form_section(ui, Icon::Cube, "Modèles");
@@ -212,6 +226,9 @@ fn form(ui: &mut Ui, s: &mut Settings, token: &mut String, accounts: &HashMap<Pr
         text(ui, "Modèle DeepSeek", &mut s.deepseek_model, "deepseek-flash = V4.1 Flash 1017");
         text(ui, "URL Claude", &mut s.claude_url, "https://api.anthropic.com (ignorée en abonnement)");
         text(ui, "Modèle Claude", &mut s.claude_model, "claude-sonnet-4-5");
+        text(ui, "URL Gemini", &mut s.gemini_url, "endpoint OpenAI-compatible des clés API (ignorée en abonnement)");
+        text(ui, "Modèle Gemini", &mut s.gemini_model, "gemini-3.8-pro");
+        text(ui, "Gemini Flash", &mut s.gemini_flash_model, "gemini-3.8-flash — reçoit le travail délégué");
         text(ui, "URL Jev", &mut s.jev_url, "");
         text(ui, "Modèle Jev", &mut s.jev_model, "jev-latest ou version épinglée");
     });
@@ -237,14 +254,23 @@ fn form(ui: &mut Ui, s: &mut Settings, token: &mut String, accounts: &HashMap<Pr
         });
         ui.end_row();
         ui.label(label("Étapes max / tour"));
-        ui.add(DragValue::new(&mut s.max_steps).range(4..=96));
+        ui.horizontal(|ui| {
+            ui.add_enabled(!s.unlimited_steps, DragValue::new(&mut s.max_steps).range(4..=96));
+            ui.add_space(10.0);
+            ui.checkbox(&mut s.unlimited_steps, "Infinie")
+                .on_hover_text("Aucune limite d'étapes : le tour continue jusqu'à la réponse finale (■ Stop pour arrêter)");
+        });
         ui.end_row();
         switch(ui, "Commandes sûres", &mut s.auto_approve, "Exécuter sans demander (les risquées demandent toujours)");
         switch(ui, "Bypass", &mut s.bypass, "Tout accepter sans demander (commandes destructrices toujours bloquées)");
         switch(ui, "Modifications", &mut s.confirm_edits, "Valider chaque modification de fichier (diff affiché)");
         switch(ui, "Diagnostics", &mut s.auto_diagnostics, "Vérifier le code après modification (cargo check, tsc, go vet…)");
         switch(ui, "Effort auto", &mut s.auto_effort, "Effort ajusté par Jev (plafond = votre choix)");
-        switch(ui, "Délégation", &mut s.delegate, "Déléguer à DeepSeek Flash : questions simples et résumés");
+        switch(ui, "Délégation", &mut s.delegate, "Questions simples et résumés confiés à un modèle Flash");
+        switch(ui, "Gemini Flash d'abord", &mut s.delegate_gemini, "Gemini Flash reçoit la délégation ; DeepSeek Flash si indisponible ou quota à 100 %");
+        switch(ui, "Tests & commentaires", &mut s.delegate_routine, "Tests (unitaires, intégration, end-to-end) et commentaires de code délégués aussi");
+        switch(ui, "Modèle auto (Claude)", &mut s.auto_model, "Jev choisit Haiku, Sonnet ou votre modèle selon la difficulté de chaque tour");
+        switch(ui, "Tests en continu", &mut s.live_tests, "Tests relancés en arrière-plan pendant le code (cargo watch, vitest, ptw…) ; l'agent ne les relance plus à la fin");
         ui.label(label("Compaction"));
         let mut k = s.compact_at / 1000;
         ui.add(DragValue::new(&mut k).range(20..=900).suffix(" k tokens"))
@@ -280,6 +306,50 @@ fn form(ui: &mut Ui, s: &mut Settings, token: &mut String, accounts: &HashMap<Pr
                 }
             });
         });
+    });
+    sub
+}
+
+/// GitHub account: device-flow login or a pasted token, shared with the agent's shell when allowed.
+fn github_section(ui: &mut Ui, s: &mut Settings, token: &mut String, account: Option<&String>) -> Option<SubAction> {
+    let mut sub = None;
+    widgets::form_section(ui, Icon::Globe, "GitHub");
+    card_grid(ui, "github", |ui| {
+        ui.label(RichText::new("GitHub").font(super::theme::bold(14.0)).color(TEXT));
+        ui.horizontal(|ui| match account {
+            Some(login) => {
+                widgets::chip_icon(ui, Some(Icon::Check), format!("Connecté · {login}"), GREEN);
+            }
+            None => {
+                widgets::chip(ui, "Non connecté", FAINT);
+            }
+        });
+        ui.end_row();
+        ui.label("");
+        ui.horizontal_wrapped(|ui| {
+            if widgets::pill(ui, Some(Icon::Globe), "Se connecter à GitHub", SOFT, false).clicked() {
+                sub = Some(SubAction::Connect(Provider::GitHub));
+            }
+            if account.is_some() && widgets::pill(ui, Some(Icon::Close), "Se déconnecter", MUTED, false).clicked() {
+                sub = Some(SubAction::Disconnect(Provider::GitHub));
+            }
+        });
+        ui.end_row();
+        ui.label(label("Jeton"));
+        ui.horizontal(|ui| {
+            ui.add(
+                TextEdit::singleline(token)
+                    .hint_text("ghp_… ou github_pat_… (au lieu de la connexion)")
+                    .password(true)
+                    .margin(Margin::symmetric(10, 6))
+                    .desired_width(FIELD - 90.0),
+            );
+            if widgets::pill(ui, None, "Utiliser", SOFT, false).clicked() && !token.trim().is_empty() {
+                sub = Some(SubAction::GitHubToken);
+            }
+        });
+        ui.end_row();
+        switch(ui, "Shell de l'agent", &mut s.github_shell, "git push / gh authentifiés avec ce compte (jeton jamais écrit sur disque)");
     });
     sub
 }

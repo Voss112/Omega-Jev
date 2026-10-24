@@ -3276,7 +3276,7 @@ dependencies = [
 
 [[package]]
 name = "omega"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3305,6 +3305,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "syntect",
  "tokio",
  "toml",
  "tree-sitter",

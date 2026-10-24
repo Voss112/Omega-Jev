@@ -5,7 +5,7 @@ use eframe::egui::{self, Align, FontId, Id, Layout, Margin, Modal, RichText, Sen
 use super::{
     App, fx,
     icons::{self, Icon},
-    theme::{ACCENT_HI, EDGE, FAINT, MUTED, SOFT},
+    theme::{ACCENT_HI, EDGE, FAINT, MUTED, SOFT, TEXT},
     widgets,
 };
 use crate::{app::login::Login, domain::auth::Provider};
@@ -30,14 +30,30 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 ui.ctx().copy_text(login.url.clone());
             }
         });
-        if login.provider == Provider::Claude {
+        if !login.user_code.is_empty() {
             ui.add_space(14.0);
-            ui.label(RichText::new("Collez le code affiché après validation").size(12.5).color(MUTED));
+            ui.label(RichText::new("Code à saisir sur GitHub").size(12.5).color(MUTED));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&login.user_code).font(FontId::monospace(26.0)).color(TEXT));
+                ui.add_space(8.0);
+                if widgets::pill(ui, Some(Icon::Copy), "Copier le code", SOFT, false).clicked() {
+                    ui.ctx().copy_text(login.user_code.clone());
+                }
+            });
+        }
+        if login.accepts_paste() {
+            ui.add_space(14.0);
+            let prompt = match login.provider {
+                Provider::Gemini => "Si la page de retour ne s'ouvre pas, collez son adresse complète ici",
+                _ => "Collez le code affiché après validation",
+            };
+            ui.label(RichText::new(prompt).size(12.5).color(MUTED));
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.add(
                     TextEdit::singleline(&mut login.paste)
-                        .hint_text("code#state")
+                        .hint_text(if login.provider == Provider::Gemini { "http://127.0.0.1:…/oauth2callback?…&code=…" } else { "code#state" })
                         .margin(Margin::symmetric(10, 7))
                         .desired_width(ui.available_width() - 140.0),
                 );
@@ -91,6 +107,14 @@ fn instructions(ui: &mut Ui, login: &Login) {
         Provider::Claude => &[
             "Ouvrez la page et connectez-vous avec votre compte Claude (Pro ou Max).",
             "Après validation, la page affiche un code : copiez-le et collez-le ci-dessous.",
+        ],
+        Provider::Gemini => &[
+            "La page Google s'est ouverte : connectez-vous avec le compte de votre abonnement Gemini (AI Pro ou Ultra).",
+            "Acceptez l'accès : Omega reçoit la réponse tout seul et active Gemini Code Assist sur ce compte.",
+        ],
+        Provider::GitHub => &[
+            "La page github.com/login/device s'est ouverte : saisissez le code ci-dessous.",
+            "Autorisez l'accès : git et gh fonctionneront dans le shell de l'agent (option dans ⚙ Paramètres).",
         ],
     };
     widgets::card(ui, EDGE, |ui| {

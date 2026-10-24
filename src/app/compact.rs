@@ -36,9 +36,27 @@ pub async fn maybe(conv: &mut Conversation, env: &Env, emit: &Emitter) -> Result
     let messages =
         vec![json!({ "role": "system", "content": PROMPT }), json!({ "role": "user", "content": transcript(conv, from, upto) })];
     // Summarizing needs no reasoning: thinking off (or the shortest a model allows) on whichever engine writes it.
-    let llm = &env.summarizer().with_effort(Effort::Off);
-    let body = llm.body(&messages, None);
-    let done = llm.stream(&body, |_| {}).await?;
+    // A Flash model out of quota or unreachable hands over to the next one, the main engine last.
+    let mut written = None;
+    let mut last_error = None;
+    for engine in env.summarizers() {
+        let llm = engine.with_effort(Effort::Off);
+        let body = llm.body(&messages, None);
+        match llm.stream(&body, |_| {}).await {
+            Ok(done) => {
+                written = Some((llm, body, done));
+                break;
+            }
+            Err(e) => {
+                engine.note_failure(&e);
+                last_error = Some(e);
+            }
+        }
+    }
+    let Some((llm, body, done)) = written else {
+        return Err(last_error.unwrap_or_else(|| anyhow::anyhow!("aucun moteur pour résumer")));
+    };
+    let llm = &llm;
     emit.send(Event::Usage { conv: conv.id, usage: done.usage });
     let sample = savings::plain(llm, &body, &done.usage);
     conv.savings.record(&sample);

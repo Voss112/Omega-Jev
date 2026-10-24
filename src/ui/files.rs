@@ -1,19 +1,21 @@
-//! Explorer de fichiers : arbre à gauche, onglets au-dessus de la discussion, visionneuse en lecture seule.
+//! Explorer de fichiers : arbre à gauche, onglets au-dessus de la discussion, éditeur coloré (lecture ou modification).
 
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
+    hash::{Hash, Hasher},
     io::{BufReader, Read},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use eframe::egui::{
-    Align, Color32, CornerRadius, FontId, Frame, Label, Layout, Margin, Rect, Response, RichText, ScrollArea, Sense, Stroke,
-    StrokeKind, TextWrapMode, Ui, pos2, vec2,
+    Align, Color32, CornerRadius, FontId, Frame, Galley, Key, Label, Layout, Margin, Modifiers, Rect, Response, RichText,
+    ScrollArea, Sense, Stroke, StrokeKind, TextBuffer, TextEdit, Ui, pos2, text::LayoutJob, vec2,
 };
 
 use super::{
-    App, fx,
+    App, fx, highlight,
     icons::{self, Icon},
     theme::{
         self, ACCENT, ACCENT_HI, AMBER, CODE_BG, CYAN, EDGE, EDGE_HI, FAINT, GREEN, MUTED, PINK, RED, SOFT, TEXT, TILE_ACTIVE,
@@ -22,9 +24,10 @@ use super::{
     widgets,
 };
 
-/// A file bigger than this is shown truncated: the viewer is a reader, not an editor.
+/// A file bigger than this is shown truncated, and then read-only: saving it would cut it.
 const MAX_READ: u64 = 512 * 1024;
 const MAX_ENTRIES: usize = 400;
+const CODE_FONT: f32 = 12.5;
 const SKIP: &[&str] =
     &[".git", "target", "node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".idea", ".vscode", ".next", "coverage"];
 
@@ -46,9 +49,69 @@ pub struct Entry {
 
 pub struct OpenFile {
     pub path: PathBuf,
+    /// Content on disk when last read or saved (line endings normalised to `\n`).
     text: String,
-    numbered: String,
+    /// What the editor shows and modifies.
+    buffer: String,
+    /// The file used CRLF: saving writes CRLF back.
+    crlf: bool,
     truncated: bool,
+    binary: bool,
+    editing: bool,
+    /// The agent (or another program) changed the file while it had unsaved edits.
+    stale: bool,
+    /// Coloured layout of `buffer`, keyed by its hash.
+    colours: Option<(u64, LayoutJob)>,
+}
+
+impl OpenFile {
+    fn read(path: &Path) -> std::io::Result<Self> {
+        let (raw, truncated) = read_text(path)?;
+        let binary = raw.contains('\u{0}');
+        let crlf = raw.contains("\r\n");
+        let text = if binary { "Fichier binaire : aperçu indisponible.".to_owned() } else { raw.replace("\r\n", "\n") };
+        Ok(Self {
+            path: path.to_owned(),
+            buffer: text.clone(),
+            text,
+            crlf,
+            truncated,
+            binary,
+            editing: false,
+            stale: false,
+            colours: None,
+        })
+    }
+
+    pub fn dirty(&self) -> bool {
+        self.buffer != self.text
+    }
+
+    fn editable(&self) -> bool {
+        !self.truncated && !self.binary
+    }
+
+    /// Writes the buffer back with the file's own line endings.
+    fn save(&mut self) -> std::io::Result<()> {
+        let out = if self.crlf { self.buffer.replace('\n', "\r\n") } else { self.buffer.clone() };
+        std::fs::write(&self.path, out)?;
+        self.text.clone_from(&self.buffer);
+        self.stale = false;
+        Ok(())
+    }
+
+    /// Re-reads the disk; unsaved edits are kept and the tab is flagged instead.
+    fn reload(&mut self) {
+        let Ok(fresh) = Self::read(&self.path) else { return };
+        if fresh.text == self.text {
+            return;
+        }
+        if self.dirty() {
+            self.stale = true;
+            return;
+        }
+        *self = Self { editing: self.editing, ..fresh };
+    }
 }
 
 impl Files {
@@ -56,11 +119,7 @@ impl Files {
     pub fn invalidate(&mut self) {
         self.cache.clear();
         for file in &mut self.open {
-            if let Ok((text, truncated)) = read_text(&file.path) {
-                file.numbered = number(&text);
-                file.text = text;
-                file.truncated = truncated;
-            }
+            file.reload();
         }
     }
 
@@ -73,10 +132,9 @@ impl Files {
             self.active = Some(i);
             return;
         }
-        match read_text(path) {
-            Ok((text, truncated)) => {
-                let numbered = number(&text);
-                self.open.push(OpenFile { path: path.to_owned(), text, numbered, truncated });
+        match OpenFile::read(path) {
+            Ok(file) => {
+                self.open.push(file);
                 self.active = Some(self.open.len() - 1);
                 self.error = None;
             }
@@ -153,6 +211,7 @@ fn tree(app: &mut App, ui: &mut Ui, dir: PathBuf, depth: usize) {
             let selected = app.files.active.and_then(|a| app.files.open.get(a)).is_some_and(|f| f.path == path);
             if entry(ui, indent, &name, None, selected).clicked() {
                 app.files.open_file(&path, &root);
+                app.show_tasks = false;
             }
         }
     }
@@ -203,6 +262,7 @@ pub fn tabs(app: &mut App, ui: &mut Ui) -> bool {
                 let active = app.files.active == Some(i);
                 let name =
                     file.path.file_name().map_or_else(|| file.path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                let name = if file.dirty() { format!("● {name}") } else { name };
                 match tab(ui, &name, active) {
                     Some(true) => close = Some(i),
                     Some(false) => select = Some(i),
@@ -217,8 +277,16 @@ pub fn tabs(app: &mut App, ui: &mut Ui) -> bool {
     });
     match (close, select) {
         (Some(usize::MAX), _) => {
-            app.files.open.clear();
-            app.files.active = None;
+            // Tabs with unsaved edits stay open: closing them silently would lose the work.
+            app.files.open.retain(OpenFile::dirty);
+            app.files.active = (!app.files.open.is_empty()).then_some(0);
+            if !app.files.open.is_empty() {
+                app.notify("Onglets non enregistrés gardés ouverts (Ctrl+S pour enregistrer)");
+            }
+        }
+        (Some(i), _) if app.files.open.get(i).is_some_and(OpenFile::dirty) => {
+            app.files.active = Some(i);
+            app.notify("Modifications non enregistrées : Ctrl+S pour enregistrer, ou « Annuler les modifications »");
         }
         (Some(i), _) => app.files.close(i),
         (None, Some(i)) => app.files.active = Some(i),
@@ -255,7 +323,17 @@ fn tab(ui: &mut Ui, name: &str, active: bool) -> Option<bool> {
     if close.clicked() { Some(true) } else { resp.clicked().then_some(false) }
 }
 
-/// Read-only viewer with line numbers.
+/// What the viewer's toolbar asks for.
+enum Command {
+    Close,
+    Copy,
+    Edit,
+    Save,
+    Revert,
+    Reload,
+}
+
+/// Coloured editor with line numbers: read mode by default, « Modifier » to type, Ctrl+S to save.
 pub fn viewer(app: &mut App, ui: &mut Ui) {
     let Some(index) = app.files.active else { return };
     let Some(file) = app.files.open.get(index) else {
@@ -264,49 +342,127 @@ pub fn viewer(app: &mut App, ui: &mut Ui) {
     };
     let root = app.files.root.clone().unwrap_or_default();
     let rel = short(&file.path, &root);
-    let mut close = false;
-    let mut copy = false;
+    let mut command = None;
     ui.horizontal(|ui| {
         ui.set_height(30.0);
         let (icon, color) = kind(&rel);
         let (rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
         icons::paint(ui.painter(), rect, icon, color);
-        ui.label(RichText::new(rel).font(theme::bold(14.0)).color(TEXT)).on_hover_text(file.path.display().to_string());
+        ui.label(RichText::new(&rel).font(theme::bold(14.0)).color(TEXT)).on_hover_text(file.path.display().to_string());
         if file.truncated {
-            widgets::chip(ui, "tronqué à 512 Ko", AMBER);
+            widgets::chip(ui, "tronqué à 512 Ko · lecture seule", AMBER);
+        }
+        if file.dirty() {
+            widgets::chip(ui, "non enregistré", AMBER);
+        }
+        if file.stale {
+            widgets::chip_icon(ui, Some(Icon::Alert), "modifié sur le disque", RED);
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             if widgets::pill(ui, Some(Icon::Close), "Fermer", MUTED, false).clicked() {
-                close = true;
+                command = Some(Command::Close);
             }
             if widgets::pill(ui, Some(Icon::Copy), "Copier", MUTED, false).on_hover_text("Copier le contenu").clicked() {
-                copy = true;
+                command = Some(Command::Copy);
+            }
+            if file.stale && widgets::pill(ui, Some(Icon::Refresh), "Recharger le disque", RED, false).clicked() {
+                command = Some(Command::Reload);
+            }
+            if file.dirty() {
+                if widgets::pill(ui, Some(Icon::Undo), "Annuler les modifications", MUTED, false).clicked() {
+                    command = Some(Command::Revert);
+                }
+                if widgets::pill(ui, Some(Icon::Check), "Enregistrer (Ctrl+S)", GREEN, true).clicked() {
+                    command = Some(Command::Save);
+                }
+            }
+            if file.editable() && !file.editing && widgets::pill(ui, Some(Icon::Pencil), "Modifier", ACCENT_HI, false).clicked() {
+                command = Some(Command::Edit);
             }
         });
     });
     ui.add_space(8.0);
-    let text = file.numbered.clone();
+    if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) && app.files.open[index].dirty() {
+        command = Some(Command::Save);
+    }
+    let file = &mut app.files.open[index];
     Frame::new()
         .fill(CODE_BG)
-        .stroke(Stroke::new(1.0, EDGE))
+        .stroke(Stroke::new(1.0, if file.editing { ACCENT.gamma_multiply(0.45) } else { EDGE }))
         .corner_radius(CornerRadius::same(14))
         .inner_margin(Margin::same(12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.set_height((ui.available_height() - 12.0).max(120.0));
-            ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                ui.add(Label::new(RichText::new(text).monospace().size(12.0).color(SOFT)).wrap_mode(TextWrapMode::Extend));
-            });
+            ScrollArea::both().id_salt(("file-editor", index)).auto_shrink([false, false]).show(ui, |ui| editor(ui, file));
         });
-    if copy {
-        let raw = app.files.open[index].text.clone();
-        ui.ctx().copy_text(raw);
-        app.notify("Contenu copié");
+    let file = &mut app.files.open[index];
+    match command {
+        Some(Command::Close) if file.dirty() => {
+            app.notify("Modifications non enregistrées : enregistrez ou annulez-les avant de fermer");
+        }
+        Some(Command::Close) => app.files.close(index),
+        Some(Command::Copy) => {
+            let raw = file.buffer.clone();
+            ui.ctx().copy_text(raw);
+            app.notify("Contenu copié");
+        }
+        Some(Command::Edit) => file.editing = true,
+        Some(Command::Revert) => {
+            file.buffer.clone_from(&file.text);
+            file.stale = false;
+        }
+        Some(Command::Reload) => {
+            if let Ok(fresh) = OpenFile::read(&file.path) {
+                *file = OpenFile { editing: file.editing, ..fresh };
+            }
+        }
+        Some(Command::Save) => match file.save() {
+            Ok(()) => {
+                let name = short(&file.path, &root);
+                app.files.cache.clear();
+                app.notify(format!("Enregistré : {name}"));
+            }
+            Err(e) => app.notify(format!("Enregistrement impossible : {e}")),
+        },
+        None => {}
     }
-    if close {
-        app.files.close(index);
-    }
+}
+
+/// Line numbers, then the coloured text: editable in edit mode, selectable (read-only) otherwise.
+fn editor(ui: &mut Ui, file: &mut OpenFile) {
+    let OpenFile { path, text, buffer, editing, colours, .. } = file;
+    let lines = buffer.lines().count().max(1) + usize::from(buffer.ends_with('\n'));
+    let width = lines.to_string().len();
+    let numbers: String = (1..=lines).map(|n| format!("{n:>width$}\n")).collect();
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
+    // Colouring is cached by text hash: a frame without a keystroke reuses it, a keystroke recolours once.
+    let mut layouter = |ui: &Ui, text: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        text.as_str().hash(&mut h);
+        let key = h.finish();
+        if colours.as_ref().is_none_or(|(k, _)| *k != key) {
+            *colours = Some((key, highlight::job(text.as_str(), &ext, &FontId::monospace(CODE_FONT), SOFT)));
+        }
+        let job = colours.as_ref().map(|(_, j)| j.clone()).unwrap_or_default();
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        ui.add(Label::new(RichText::new(numbers).monospace().size(CODE_FONT).color(FAINT)).selectable(false));
+        // Read mode: a `&str` buffer is selectable and copyable but cannot change.
+        let mut shown = text.as_str();
+        let edit = if *editing { TextEdit::multiline(buffer) } else { TextEdit::multiline(&mut shown) };
+        ui.add(
+            edit.code_editor()
+                .frame(Frame::NONE)
+                .desired_width(f32::INFINITY)
+                .desired_rows(lines)
+                .lock_focus(true)
+                .layouter(&mut layouter),
+        );
+    });
 }
 
 fn read_dir(dir: &Path) -> Vec<Entry> {
@@ -333,21 +489,7 @@ fn read_text(path: &Path) -> std::io::Result<(String, bool)> {
     let len = file.metadata()?.len();
     let mut buf = Vec::with_capacity(len.min(MAX_READ) as usize);
     BufReader::new(file).take(MAX_READ).read_to_end(&mut buf)?;
-    let mut text = String::from_utf8_lossy(&buf).into_owned();
-    if text.contains('\u{0}') {
-        text = "Fichier binaire : aperçu indisponible.".to_owned();
-    }
-    Ok((text, len > MAX_READ))
-}
-
-fn number(text: &str) -> String {
-    let lines = text.lines().count().max(1);
-    let width = lines.to_string().len();
-    let mut out = String::with_capacity(text.len() + lines * (width + 3));
-    for (i, line) in text.lines().enumerate() {
-        out.push_str(&format!("{:>width$} │ {line}\n", i + 1, width = width));
-    }
-    out
+    Ok((String::from_utf8_lossy(&buf).into_owned(), len > MAX_READ))
 }
 
 /// Path relative to the workspace when possible, with `/` separators.
@@ -373,4 +515,53 @@ fn kind(name: &str) -> (Icon, Color32) {
 /// Click a file in the tree: keeps the explorer open and shows the tab.
 pub fn toggle(app: &mut App) {
     app.files.show = !app.files.show;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crlf_files_are_edited_in_lf_and_saved_back_in_crlf() {
+        let dir = std::env::temp_dir().join(format!("omega-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.rs");
+        std::fs::write(&path, "fn a() {}\r\nfn b() {}\r\n").unwrap();
+        let mut file = OpenFile::read(&path).unwrap();
+        assert!(file.crlf && file.editable() && !file.dirty());
+        assert_eq!(file.buffer, "fn a() {}\nfn b() {}\n");
+        file.buffer.push_str("fn c() {}\n");
+        assert!(file.dirty());
+        file.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn a() {}\r\nfn b() {}\r\nfn c() {}\r\n");
+        assert!(!file.dirty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_disk_change_never_overwrites_unsaved_edits() {
+        let dir = std::env::temp_dir().join(format!("omega-files-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("b.txt");
+        std::fs::write(&path, "v1\n").unwrap();
+        let mut file = OpenFile::read(&path).unwrap();
+        file.buffer = "mine\n".into();
+        std::fs::write(&path, "agent\n").unwrap();
+        file.reload();
+        assert!(file.stale && file.buffer == "mine\n", "modifications gardées, onglet signalé");
+        let mut clean = OpenFile::read(&path).unwrap();
+        std::fs::write(&path, "agent 2\n").unwrap();
+        clean.reload();
+        assert_eq!(clean.buffer, "agent 2\n", "sans modification : rechargé");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn binary_and_truncated_files_are_read_only() {
+        let dir = std::env::temp_dir().join(format!("omega-files-bin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.bin"), [0u8, 1, 2]).unwrap();
+        assert!(!OpenFile::read(&dir.join("x.bin")).unwrap().editable());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

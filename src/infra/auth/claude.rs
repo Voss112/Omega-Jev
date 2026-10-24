@@ -153,6 +153,7 @@ async fn token(http: &Client, body: &Value) -> Result<Cred> {
             refresh: v["refresh_token"].as_str().unwrap_or_default().to_owned(),
             expires_at: chrono::Utc::now().timestamp() + i64::try_from(expires_in).unwrap_or(3600),
             account: v["subscriptionType"].as_str().unwrap_or("claude").to_owned(),
+            project: String::new(),
         });
     }
 }
@@ -181,6 +182,7 @@ pub fn import_cli(dir: &std::path::Path) -> Option<Cred> {
         refresh: oauth["refreshToken"].as_str().unwrap_or_default().to_owned(),
         expires_at: oauth["expiresAt"].as_i64().map_or(0, |ms| ms / 1000),
         account: oauth["subscriptionType"].as_str().unwrap_or("claude-code").to_owned(),
+        project: String::new(),
     })
 }
 

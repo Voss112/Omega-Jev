@@ -34,7 +34,7 @@ fn tool_icon(kind: Option<ToolKind>) -> Icon {
         Some(ToolKind::SecurityScan) => Icon::Shield,
         Some(ToolKind::WebSearch | ToolKind::WebFetch) => Icon::Globe,
         Some(ToolKind::AuditKit) => Icon::Clipboard,
-        Some(ToolKind::CliAnything) | None => Icon::Cube,
+        Some(ToolKind::CliAnything | ToolKind::Kits) | None => Icon::Cube,
     }
 }
 

@@ -1,7 +1,8 @@
-//! System Two streaming client: one facade over two wire protocols
-//! (OpenAI-compatible, Anthropic Messages) with subscription tokens.
+//! System Two streaming client: one facade over three wire protocols
+//! (OpenAI-compatible, Anthropic Messages, Gemini Code Assist) with subscription tokens.
 
 mod anthropic;
+mod gemini;
 mod openai;
 
 use std::time::Duration;
@@ -19,7 +20,7 @@ use crate::domain::{
     models::Choice,
     settings::Settings,
 };
-use crate::infra::auth::{Auth, claude};
+use crate::infra::auth::{Auth, claude, gemini as gemini_auth};
 
 pub enum Delta<'a> {
     Text(&'a str),
@@ -107,14 +108,12 @@ impl Llm {
     pub fn new(http: Client, settings: &Settings, engine: Engine) -> Self {
         let (base, key, model) = settings.endpoint(engine);
         let key = if key.trim().is_empty() { std::env::var(engine.key_var()).unwrap_or_default() } else { key.trim().to_owned() };
-        let provider = match engine {
-            Engine::Claude => Some(Provider::Claude),
-            Engine::DeepSeek => None,
-        };
-        let auth = provider.filter(|_| settings.auth_mode(engine) == AuthMode::Subscription).and_then(Auth::load);
+        let auth =
+            Provider::of(engine).filter(|_| settings.auth_mode(engine) == AuthMode::Subscription).and_then(Auth::load);
         // Subscription endpoints are the providers' own: the API-key URL never carries a subscription token.
         let base = match (engine, auth.is_some()) {
             (Engine::Claude, true) => claude::API.to_owned(),
+            (Engine::Gemini, true) => gemini_auth::CODE_ASSIST.to_owned(),
             _ => base.trim().trim_end_matches('/').to_owned(),
         };
         Self {
@@ -129,8 +128,39 @@ impl Llm {
         }
     }
 
+    /// A Gemini API key speaks Google's OpenAI-compatible endpoint; only the subscription uses Code Assist.
     pub fn wire(&self) -> Wire {
-        self.engine.wire()
+        match self.engine.wire() {
+            Wire::Gemini if self.auth.is_none() => Wire::OpenAi,
+            wire => wire,
+        }
+    }
+
+    /// Same credential, another model of the same provider (Jev's tier, a Flash helper).
+    pub fn with_model(&self, model: &str) -> Self {
+        Self { model: model.trim().to_owned(), ..self.clone() }
+    }
+
+    /// Out of plan quota a moment ago: delegation skips it until the cool-down ends.
+    pub fn cooling(&self) -> bool {
+        let spent = spent().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        spent.get(&(self.engine, self.model.clone())).is_some_and(|at| at.elapsed() < COOLDOWN)
+    }
+
+    /// Remembers a quota failure (other errors are transient and only fail over this once).
+    pub fn note_failure(&self, error: &anyhow::Error) {
+        if exhausted(error) {
+            spent()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert((self.engine, self.model.clone()), std::time::Instant::now());
+        }
+    }
+
+    /// Code Assist project: the stored one, else the environment, as the official CLI does.
+    fn project(&self) -> String {
+        let stored = self.auth.as_ref().map(|a| a.project()).unwrap_or_default();
+        if stored.trim().is_empty() { gemini_auth::env_project() } else { stored }
     }
 
     /// `tools` sent whole and constant, new ones surfaced mid-conversation: the cache and signed reasoning survive
@@ -148,7 +178,10 @@ impl Llm {
     /// Changing the effort between requests keeps the prompt cache: DeepSeek, and Claude's adaptive thinking
     /// (a new thinking budget voids the cached messages).
     pub fn effort_keeps_cache(&self) -> bool {
-        self.wire() == Wire::OpenAi || anthropic::adaptive(&self.model)
+        match self.wire() {
+            Wire::OpenAi | Wire::Gemini => true,
+            Wire::Anthropic => anthropic::adaptive(&self.model),
+        }
     }
 
     /// A key is set (or a subscription is connected) and will only travel over TLS.
@@ -180,6 +213,7 @@ impl Llm {
         match self.wire() {
             Wire::OpenAi => openai::body(&self.model, self.engine, self.effort, messages, tools),
             Wire::Anthropic => anthropic::body(messages, tools, &self.model, self.effort, self.auth.is_some()),
+            Wire::Gemini => gemini::body(messages, tools, &self.model, &self.project(), self.effort),
         }
     }
 
@@ -209,9 +243,9 @@ impl Llm {
                 anyhow::ensure!(status.is_success(), "count_tokens {status}: {}", error_text(&text));
                 serde_json::from_str::<Value>(&text)?["input_tokens"].as_u64().context("réponse sans input_tokens")
             }
-            Wire::OpenAi => {
+            Wire::OpenAi | Wire::Gemini => {
                 let mut body = body.clone();
-                body["max_tokens"] = json!(1);
+                cap_output(&mut body, 1);
                 let done = self.stream(&body, |_| {}).await?;
                 anyhow::ensure!(done.usage.prompt > 0, "{} n'a renvoyé aucun usage", self.engine.label());
                 Ok(done.usage.prompt)
@@ -232,6 +266,10 @@ impl Llm {
     /// Provider model list (`/models`, `/v1/models`), ids and display names.
     async fn listed(&self) -> Result<Vec<Choice>> {
         anyhow::ensure!(self.base.starts_with("https://"), "URL {} non HTTPS refusée", self.engine.label());
+        // Code Assist has no model list: the catalogue (and a free-form id) feeds the picker.
+        if self.wire() == Wire::Gemini {
+            return Ok(crate::domain::models::suggested(self.engine).iter().map(|m| Choice::new(m.id, m.name)).collect());
+        }
         let anthropic = self.wire() == Wire::Anthropic;
         let url = if anthropic { format!("{}/v1/models?limit=1000", self.base) } else { format!("{}/models", self.base) };
         let token = self.authorization().await?;
@@ -248,6 +286,17 @@ impl Llm {
 
     /// Credential valid and configured model actually reachable.
     pub async fn ping(&self) -> Result<()> {
+        // Code Assist: the account must have a tier and a project; the project found is kept for the requests.
+        if self.wire() == Wire::Gemini {
+            let auth = self.auth.as_ref().with_context(|| self.missing())?;
+            let token = auth.fresh(&self.http).await?;
+            let (tier, project) = gemini_auth::tier(&self.http, &token, &self.project()).await?;
+            anyhow::ensure!(!project.is_empty(), "Code Assist : aucun projet attaché (offre {tier})");
+            if project != auth.project() {
+                auth.save(crate::domain::auth::Cred { project, ..auth.cred() })?;
+            }
+            return Ok(());
+        }
         match self.models().await {
             Ok(models) => {
                 anyhow::ensure!(
@@ -268,7 +317,7 @@ impl Llm {
         // The model's own request shape (thinking settings differ by generation), as small as it gets.
         let quiet = Self { effort: Effort::Off, ..self.clone() };
         let mut body = quiet.body(&[json!({ "role": "user", "content": "ok" })], None);
-        body["max_tokens"] = json!(16);
+        cap_output(&mut body, 16);
         let res = self.send(&body).await?;
         let status = res.status();
         anyhow::ensure!(status.is_success(), "{} {status}", self.engine.label());
@@ -303,6 +352,7 @@ impl Llm {
         match self.wire() {
             Wire::OpenAi => openai::apply(out, data, on),
             Wire::Anthropic => anthropic::apply(out, data, on),
+            Wire::Gemini => gemini::apply(out, data, on),
         }
     }
 
@@ -310,6 +360,7 @@ impl Llm {
         match self.wire() {
             Wire::OpenAi => format!("{}/chat/completions", self.base),
             Wire::Anthropic => format!("{}/v1/messages", self.base),
+            Wire::Gemini => format!("{}:streamGenerateContent?alt=sse", self.base),
         }
     }
 
@@ -338,6 +389,7 @@ impl Llm {
             let mut req = self.http.post(&url).json(body);
             req = match self.wire() {
                 Wire::OpenAi => req.bearer_auth(&token),
+                Wire::Gemini => req.bearer_auth(&token).header("user-agent", gemini_auth::USER_AGENT),
                 Wire::Anthropic => anthropic_headers(req, &token, self.auth.is_some(), anthropic::uses_deferred_tools(body)),
             };
             let res = req.send().await.with_context(|| format!("{} injoignable", self.engine.label()))?;
@@ -357,7 +409,16 @@ impl Llm {
                 continue;
             }
             attempt += 1;
+            // Plan quota spent: retrying only burns time, the caller falls back to another engine.
+            if quota_error(code, &text) {
+                bail!("{} {status}: {QUOTA} — {}", self.engine.label(), error_text(&text));
+            }
             if !retryable(code, attempt) {
+                if self.wire() == Wire::Gemini
+                    && let Some(hint) = gemini_auth::hint(&text)
+                {
+                    bail!("{} {status}: {hint}", self.engine.label());
+                }
                 if code == 404 && self.wire() == Wire::OpenAi {
                     let models = self.models().await.map_or_else(|_| "?".to_owned(), |m| m.join(", "));
                     bail!("{} 404: {} — modèles accessibles avec cette clé : {models}", self.engine.label(), error_text(&text));
@@ -366,6 +427,40 @@ impl Llm {
             }
             tokio::time::sleep(Duration::from_millis(900 * u64::from(attempt))).await;
         }
+    }
+}
+
+const QUOTA: &str = "quota épuisé";
+/// A model out of quota is not asked again before this (plans reset hourly to daily).
+const COOLDOWN: Duration = Duration::from_secs(30 * 60);
+
+/// (engine, model) → when its quota ran out, shared by every `Llm` handle of the process.
+fn spent() -> &'static std::sync::Mutex<std::collections::HashMap<(Engine, String), std::time::Instant>> {
+    static SPENT: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(Engine, String), std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    SPENT.get_or_init(Default::default)
+}
+
+/// A 429 that means "plan used up" rather than "too fast": no retry helps before the reset.
+fn quota_error(status: u16, body: &str) -> bool {
+    let lower = body.to_lowercase();
+    status == 429
+        && ["resource_exhausted", "quota", "exhausted your capacity", "usage limit"]
+            .iter()
+            .any(|m| lower.contains(m))
+}
+
+/// The engine ran out of plan quota (an error from a request): delegation moves on to the next engine.
+pub fn exhausted(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains(QUOTA)
+}
+
+/// Output cap of a probe or count request, in the wire's own field.
+fn cap_output(body: &mut Value, tokens: u32) {
+    if body.get("request").is_some() {
+        body["request"]["generationConfig"]["maxOutputTokens"] = json!(tokens);
+    } else {
+        body["max_tokens"] = json!(tokens);
     }
 }
 
@@ -440,6 +535,29 @@ mod tests {
         // Subscription credentials on disk must not be mistaken for an API key.
         assert!(!llm.subscription());
         assert!(!llm.configured(), "sans clé");
+    }
+
+    #[test]
+    fn a_gemini_key_speaks_the_openai_compatible_endpoint() {
+        let s = Settings { gemini_auth: AuthMode::ApiKey, gemini_key: "AIza".into(), ..Settings::default() };
+        let llm = Llm::new(crate::infra::http::client("").unwrap(), &s, Engine::Gemini);
+        assert_eq!(llm.wire(), Wire::OpenAi);
+        assert_eq!(llm.url(), "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
+        let flash = llm.with_model(" gemini-3.8-flash ");
+        assert_eq!(flash.body(&[json!({ "role": "user", "content": "x" })], None)["model"], "gemini-3.8-flash");
+    }
+
+    #[test]
+    fn a_spent_quota_cools_the_model_down_but_other_errors_do_not() {
+        let s = Settings { gemini_auth: AuthMode::ApiKey, gemini_key: "k".into(), ..Settings::default() };
+        let llm = Llm::new(crate::infra::http::client("").unwrap(), &s, Engine::Gemini).with_model("gemini-cooldown-test");
+        assert!(quota_error(429, r#"{"error":{"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded"}}"#));
+        assert!(!quota_error(429, r#"{"error":{"message":"Too many requests, slow down"}}"#), "trop rapide ≠ quota");
+        llm.note_failure(&anyhow::anyhow!("Gemini injoignable"));
+        assert!(!llm.cooling());
+        llm.note_failure(&anyhow::anyhow!("Gemini 429: {QUOTA} — Quota exceeded"));
+        assert!(llm.cooling());
+        assert!(!llm.with_model("gemini-other").cooling(), "par modèle");
     }
 
     #[test]

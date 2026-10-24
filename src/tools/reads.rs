@@ -99,7 +99,7 @@ mod tests {
     }
 
     fn history(args: &str, output: &str) -> Vec<Message> {
-        let call = ToolCall { id: "c1".into(), name: "read_file".into(), arguments: args.into() };
+        let call = ToolCall { id: "c1".into(), name: "read_file".into(), arguments: args.into(), ..ToolCall::default() };
         vec![Message::assistant(String::new(), String::new(), vec![call]), Message::tool("c1".into(), output.into())]
     }
 

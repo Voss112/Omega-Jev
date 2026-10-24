@@ -90,7 +90,16 @@ impl App {
                 }
                 Event::Vpn(v) => self.vpn = Some(v),
                 Event::Connected { provider, result } => self.connected(provider, result),
-                Event::PlanUsage { provider, windows } => self.plan_usage = Some((provider, windows, Instant::now())),
+                Event::PlanUsage { provider, windows } => {
+                    self.plan_usage.insert(provider, (windows, Instant::now()));
+                }
+                Event::DeviceCode { code, url } => {
+                    if let Some(login) = self.login.as_mut().filter(|l| l.provider == crate::domain::auth::Provider::GitHub) {
+                        login.user_code = code;
+                        login.url = url;
+                        login.status = "En attente de la validation sur github.com…".to_owned();
+                    }
+                }
                 Event::Models { engine, result } => match result {
                     Ok(models) => {
                         self.catalog.insert(engine, models);

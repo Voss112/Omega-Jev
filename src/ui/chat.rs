@@ -6,12 +6,13 @@ use eframe::egui::{
     Align, Color32, CornerRadius, FontId, Frame, Id, Label, Layout, Margin, Pos2, Rect, RichText, ScrollArea, Sense, Shape,
     Stroke, TextWrapMode, Ui, UiBuilder, collapsing_header::CollapsingState, emath::easing, pos2, vec2,
 };
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use egui_commonmark::CommonMarkCache;
 use uuid::Uuid;
 
 use super::{
     App, Live, attach, cards, files, fx,
     icons::{self, Icon},
+    markdown,
     theme::{self, ACCENT, ACCENT_HI, CYAN, EDGE, EDGE_HI, FAINT, GREEN, INDIGO, MUTED, PINK, RED, SOFT, TEXT, TILE, TILE_HOVER},
     widgets,
 };
@@ -417,7 +418,7 @@ fn assistant(
         }
         if !m.content.trim().is_empty() {
             dots.push(ui.cursor().top() + 11.0);
-            CommonMarkViewer::new().show(ui, md, &m.content);
+            markdown::show(ui, md, &m.content);
         }
         for call in &m.tool_calls {
             dots.push(cards::tool_card(ui, i, call, results.get(&(i, call.id.as_str())).copied(), t));
@@ -513,7 +514,7 @@ fn streaming(ui: &mut Ui, md: &mut CommonMarkCache, live: &Live, step: Step, t: 
             dots.push(rect.center().y);
         } else if !live.text.is_empty() {
             dots.push(ui.cursor().top() + 11.0);
-            CommonMarkViewer::new().show(ui, md, &live.text);
+            markdown::show(ui, md, &live.text);
         }
     });
 }

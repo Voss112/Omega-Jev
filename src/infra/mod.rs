@@ -8,4 +8,5 @@ pub mod paths;
 pub mod process;
 pub mod secret;
 pub mod store;
+pub mod voice;
 pub mod vpn;

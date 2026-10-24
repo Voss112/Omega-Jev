@@ -47,6 +47,7 @@ pub enum Icon {
     Minimize,
     Maximize,
     Restore,
+    Mic,
 }
 
 /// Paints `icon` centred in `rect`, scaled to its smaller side.
@@ -213,6 +214,12 @@ impl Pen<'_> {
                 self.rect(3.0, 3.0, 21.0, 21.0, 2.5);
                 self.circle(9.0, 9.0, 2.0);
                 self.line(&[(21.0, 15.0), (16.0, 10.0), (5.0, 21.0)]);
+            }
+            Icon::Mic => {
+                self.rect(9.0, 2.5, 15.0, 14.5, 3.0);
+                self.line(&self.arc(12.0, 11.0, 6.5, 0.0, 180.0));
+                self.line(&[(12.0, 17.5), (12.0, 21.0)]);
+                self.line(&[(8.5, 21.0), (15.5, 21.0)]);
             }
             Icon::Clock => {
                 self.circle(12.0, 12.0, 9.5);

@@ -15,7 +15,7 @@ use super::{
 use crate::{
     domain::{
         auth::{AuthMode, Provider},
-        settings::{Settings, Style},
+        settings::{DICTATION_LANGUAGES, Settings, Style},
     },
     infra::paths,
 };
@@ -222,6 +222,16 @@ fn form(ui: &mut Ui, s: &mut Settings, token: &mut String, accounts: &HashMap<Pr
             for style in Style::ALL {
                 if widgets::menu_item(ui, s.style == style, style.label()).clicked() {
                     s.style = style;
+                }
+            }
+        });
+        ui.end_row();
+        ui.label(label("Langue de dictée"));
+        let current = DICTATION_LANGUAGES.iter().find(|(code, _)| *code == s.dictation_language).map_or("Français", |(_, l)| l);
+        widgets::dropdown(ui, None, current, 240.0, |ui| {
+            for (code, name) in DICTATION_LANGUAGES {
+                if widgets::menu_item(ui, s.dictation_language == code, name).clicked() {
+                    s.dictation_language = code.into();
                 }
             }
         });

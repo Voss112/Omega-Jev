@@ -1,0 +1,22 @@
+# Build of whisper.cpp (whisper-rs-sys) with the MinGW toolchain.
+[env]
+# bindgen loads libclang at build time (libclang 18.1.1 from the PyPI wheel, SHA-256 checked).
+# The bindings shipped with whisper-rs-sys are Linux-only (64-bit `long`): they do not compile here.
+LIBCLANG_PATH = "C:\\Users\\Anonymous\\tools\\libclang"
+# The wheel has no clang builtin headers (stdbool.h…): GCC's and MinGW's are used instead.
+BINDGEN_EXTRA_CLANG_ARGS = "-IC:/Users/Anonymous/tools/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include -IC:/Users/Anonymous/tools/mingw64/x86_64-w64-mingw32/include"
+CMAKE_GENERATOR = "Ninja"
+CMAKE_PROJECT_INCLUDE = { value = "build-support/ggml-lib-prefix.cmake", relative = true }
+# Whisper on the GPU (ggml Vulkan backend). Vulkan headers, glslc and libvulkan-1.dll.a come from MSYS2 ucrt64
+# packages (SHA-256 checked against repo.msys2.org's ucrt64.db), unpacked without installer. Runtime: vulkan-1.dll,
+# shipped with every GPU driver.
+VULKAN_SDK = "C:\\Users\\Anonymous\\tools\\vulkan\\ucrt64"
+# Replaces the MSVC-only `/utf-8` whisper-rs-sys adds on Windows (a defined CMAKE_CXX_FLAGS takes precedence).
+CMAKE_CXX_FLAGS = "-finput-charset=UTF-8"
+# Portable x86-64 build (AVX2 baseline, 2013+): `-march=native` would crash the installed app on another CPU.
+GGML_NATIVE = "OFF"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+GGML_BMI2 = "ON"

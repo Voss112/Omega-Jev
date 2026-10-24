@@ -5,11 +5,13 @@ mod attach;
 mod cards;
 mod chat;
 mod composer;
+mod dictation;
 mod events;
 mod files;
 mod fx;
 mod icons;
 mod login;
+mod markdown;
 mod panel;
 mod pace;
 mod savings;
@@ -134,6 +136,8 @@ pub struct App {
     catalog_error: HashMap<Engine, String>,
     /// Free-form model id being typed in the composer.
     model_input: Option<String>,
+    /// Voice dictation in progress.
+    voice: Option<dictation::Voice>,
 }
 
 impl App {
@@ -189,6 +193,7 @@ impl App {
             catalog: HashMap::new(),
             catalog_error: HashMap::new(),
             model_input: None,
+            voice: None,
         };
         if let Some(n) = unreadable.or(notice) {
             app.notify(n);
@@ -260,8 +265,13 @@ impl App {
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::N)) {
             self.new_chat();
         }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::M)) {
+            self.toggle_dictation(ctx);
+        }
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-            if self.editing.is_some() {
+            if let Some(v) = &self.voice {
+                v.stop();
+            } else if self.editing.is_some() {
                 self.cancel_edit();
             } else if let Some(id) = self.current.filter(|_| self.busy()) {
                 self.stop(id);
@@ -292,10 +302,11 @@ fn build_env(settings: &Settings, web: &Arc<WebIndex>) -> (Arc<Env>, Option<Stri
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.pump();
+        let ctx = ui.ctx().clone();
+        self.pump_dictation(&ctx);
         if self.tex_owner != self.current {
             self.evict_textures();
         }
-        let ctx = ui.ctx().clone();
         self.shortcuts(&ctx);
         fx::backdrop(&ctx, ctx.content_rect(), fx::now(&ctx));
         let activity = ctx.input(|i| pace::Activity {

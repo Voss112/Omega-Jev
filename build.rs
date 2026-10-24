@@ -20,6 +20,7 @@ fn main() {
         return;
     }
     // GNU: call windres from OUT_DIR with relative input (embed-resource mis-quotes paths with spaces).
+    static_libstdcxx(&out_dir);
     let out = out_dir.join("omega-res.o");
     let status = Command::new("windres")
         .current_dir(&out_dir)
@@ -29,6 +30,19 @@ fn main() {
         .expect("windres not found (install MinGW binutils)");
     assert!(status.success(), "windres failed");
     println!("cargo:rustc-link-arg-bins={}", out.display());
+}
+
+/// whisper.cpp needs libstdc++; whisper-rs-sys asks for `-lstdc++`, which ld resolves to the DLL import library
+/// first (the installed exe would then need libstdc++-6.dll). A search directory holding only the static archive
+/// comes before gcc's own: the C++ runtime is linked in and the exe stays self-contained.
+fn static_libstdcxx(out_dir: &Path) {
+    let found = Command::new("g++").arg("-print-file-name=libstdc++.a").output().expect("g++ not found (MinGW)");
+    let lib = PathBuf::from(String::from_utf8_lossy(&found.stdout).trim());
+    assert!(lib.is_file(), "libstdc++.a not found: {}", lib.display());
+    let dir = out_dir.join("static-cxx");
+    fs::create_dir_all(&dir).expect("static-cxx dir");
+    fs::copy(&lib, dir.join("libstdc++.a")).expect("copy libstdc++.a");
+    println!("cargo:rustc-link-search=native={}", dir.display());
 }
 
 /// Fills the template: the file version always follows Cargo.toml, the icon is referenced by absolute path.

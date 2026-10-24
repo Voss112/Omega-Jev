@@ -6,6 +6,7 @@ mod bench_output;
 pub mod clear;
 pub mod compact;
 pub mod context;
+pub mod dictation;
 pub mod health;
 pub mod login;
 pub mod prompts;

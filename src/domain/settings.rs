@@ -47,6 +47,19 @@ impl Style {
     }
 }
 
+/// Dictation languages offered in the settings: (Whisper code, label).
+pub const DICTATION_LANGUAGES: [(&str, &str); 9] = [
+    ("auto", "Détection automatique"),
+    ("fr", "Français"),
+    ("en", "English"),
+    ("es", "Español"),
+    ("de", "Deutsch"),
+    ("it", "Italiano"),
+    ("pt", "Português"),
+    ("nl", "Nederlands"),
+    ("ru", "Русский"),
+];
+
 /// Flat user-facing configuration (one toggle per option is intended).
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -71,6 +84,8 @@ pub struct Settings {
     /// Simple questions and conversation summaries go to DeepSeek Flash instead of the main engine.
     pub delegate: bool,
     pub style: Style,
+    /// Dictation language (ISO 639-1) or `auto`; a fixed language is faster and more accurate on short phrases.
+    pub dictation_language: String,
     pub max_steps: u32,
     pub auto_approve: bool,
     /// Bypass permissions: every approval is auto-granted (hard-blocked commands stay blocked).
@@ -105,6 +120,7 @@ impl Default for Settings {
             auto_effort: true,
             delegate: true,
             style: Style::default(),
+            dictation_language: "fr".into(),
             max_steps: 64,
             auto_approve: true,
             bypass: false,

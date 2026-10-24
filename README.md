@@ -6,7 +6,7 @@ Tout tient dans un seul binaire (Windows et Linux), sans serveur externe ni tél
 
 ## Démarrage
 
-1. Windows : double-cliquer `Omega-0.4.1-x64.msi` (installation par utilisateur, sans droits admin, raccourci Bureau). Linux : `target/release/omega`.
+1. Windows : double-cliquer `Omega-0.8.0-x64.msi` (installation par utilisateur, sans droits admin, raccourci Bureau). Linux : `target/release/omega`.
 2. Au premier lancement, la fenêtre ⚙ Paramètres s'ouvre. Coller la clé **DeepSeek** (platform.deepseek.com) et la clé **Jev** (console.typesafe.ai ; sans elle, un routeur local prend le relais). Claude passe par l'abonnement (bouton « Se connecter ») ou une clé API.
 3. Choisir un dossier de travail (📁 en bas à gauche). Par défaut : `Documents\Omega` (`~/Documents/Omega` sous Linux).
 
@@ -19,6 +19,8 @@ Règles permanentes d'un projet : `OMEGA.md` à sa racine (bouton « Créer OMEG
 - **Fournisseur · modèle · effort** (zone de saisie) : ⟳ récupère la liste réelle des modèles du compte, « ✎ Autre identifiant… » accepte n'importe quel id (ex. `claude-opus-5-5`). Le choix est mémorisé par fournisseur dans `settings.toml` et chaque réponse porte le modèle qui l'a produite. Une erreur du fournisseur (modèle absent du compte, 404) s'affiche telle quelle : aucun repli silencieux.
 - **Fichiers** (bouton 📁 en haut) : arborescence du dossier de travail, clic pour ouvrir un fichier dans un onglet au-dessus de la discussion, visionneuse numérotée en lecture seule (512 Ko max, binaire détecté).
 - **Images** : glisser-déposer, `Ctrl+V` (capture d'écran) ou 🖼 dans la zone de saisie. Redimensionnées à 1568 px, 4 max par message, vignettes dans la bulle. Envoyées uniquement aux moteurs qui lisent les images (Claude) ; DeepSeek les garde locales.
+- **🎙 Dictée** (`Ctrl+M` ou bouton micro) : parlez, chaque phrase s'écrit dans la zone de saisie dès la pause qui la termine ; `Entrée` arrête et envoie, `Échap` arrête. Whisper large-v3-turbo **en local sur le GPU** (Vulkan ; CPU sans GPU) : 0,2 s pour une phrase, 0,3 s pour 11 s de parole sur RX 6950 XT. Le silence ne produit rien. Langue dans ⚙ Paramètres (français par défaut, détection automatique possible). Au premier usage, le modèle (574 Mo) est téléchargé une fois depuis Hugging Face, via le proxy configuré, et son SHA-256 est vérifié.
+- **Tableaux** : colonnes dimensionnées sur la largeur de lecture, texte replié dans chaque cellule.
 - **⏰ Programmer** : prompt + jour + heure + moteur + modèle + effort, répétition quotidienne optionnelle. À l'heure dite, Omega ouvre une discussion et l'exécute **toujours en bypass**, avec le modèle choisi au moment de la programmation, sans toucher à vos réglages, à votre brouillon ni à la discussion ouverte. Une tâche quotidienne garde son heure locale au changement d'heure. Les tâches sont enregistrées dans `%APPDATA%/Omega/schedules.json` et ne partent que si Omega est ouvert.
 - **⚙ Paramètres → Économies de tokens · preuve** : chaque requête est mesurée avec les chiffres du fournisseur (entrée, cache lu/écrit, sortie, Jev) ; les leviers (lazy tools, RTK, playbooks, compaction, cache) sont mesurés en octets sur la vraie requête et convertis avec le ratio tokens/octet calibré sur vos requêtes, puis pondérés au tarif réel. **Banc d'essai** : Jev noté sur 7 demandes étiquetées, lazy tools / RTK / TOON en tokens exacts (`count_tokens` Claude), cache vérifié par deux requêtes réelles, style A/B, CLI-Anything.
 - **Dernier verdict Jev** : skill, source, confiance, cinq métriques (code, web, risque, impact, apps) et outils chargés, en cartes compactes.
@@ -28,8 +30,11 @@ Règles permanentes d'un projet : `OMEGA.md` à sa racine (bouton « Créer OMEG
 ```sh
 cargo build --release                      # binaire optimisé (LTO), icône intégrée
 cargo test                                 # tests outils, domaine, DPAPI, SSRF, checkpoints
+cargo test --release -- --ignored voice_live dictation_live --nocapture   # dictée réelle (modèle + GPU)
 powershell -File installer/build-msi.ps1   # MSI (WiX 3.x dans %USERPROFILE%\tools\wix314 ou $env:WIX_BIN)
 ```
+
+Windows (cible `x86_64-pc-windows-gnu`) : la dictée compile whisper.cpp. Prérequis, tous chemins dans `.cargo/config.toml` : MinGW-w64 (gcc, CMake, Ninja), `libclang.dll` pour bindgen, et en-têtes Vulkan + `glslc` + `libvulkan-1.dll.a` (paquets MSYS2 ucrt64). L'exe n'importe que des DLL système et `vulkan-1.dll` (fourni par le pilote GPU) ; la C++ runtime est liée statiquement (`build.rs`). `vendor/whisper-rs` : copie de whisper-rs 0.16.0 avec un correctif MinGW (voir `vendor/README.md`).
 
 Linux : paquets X11/Wayland usuels requis à l'exécution (comme toute app egui).
 
@@ -68,6 +73,7 @@ Linux : paquets X11/Wayland usuels requis à l'exécution (comme toute app egui)
 - Clés API chiffrées par DPAPI (liées à votre compte Windows).
 - Abonnements : jetons OAuth scellés dans `credentials/` (DPAPI), rafraîchis en série ; jeton Claude longue durée (`claude setup-token`) accepté sans échange réseau.
 - Images : redimensionnées et stockées dans la discussion locale, jamais envoyées à un moteur qui ne les lit pas.
+- Voix : capturée et transcrite sur la machine ; aucun audio n'est enregistré sur disque ni envoyé. Le micro n'est ouvert que pendant la dictée.
 - Anti-SSRF : redirections et résolutions DNS vers des adresses privées refusées ; pages web marquées « non fiables ».
 - User-Agent générique, aucun identifiant envoyé hors des appels API.
 - Proxy/Tor (`socks5h://127.0.0.1:9050`), détection VPN locale (adaptateurs), kill-switch optionnel ; la vérification de l'IP de sortie (ipwho.is) est **désactivée par défaut** et s'active dans ⚙ Paramètres.
@@ -78,8 +84,8 @@ Linux : paquets X11/Wayland usuels requis à l'exécution (comme toute app egui)
 ```
 src/
   domain/   modèle pur : discussion, route, skills, catalogue de modèles, outils, réglages
-  infra/    clients des moteurs (SSE), Jev, disque, HTTP, processus, VPN, DPAPI
-  app/      cas d'usage : routeur Jev, assemblage du contexte, boucle agent, auto-tests
+  infra/    clients des moteurs (SSE), Jev, disque, HTTP, processus, VPN, DPAPI, voix (micro, Whisper)
+  app/      cas d'usage : routeur Jev, assemblage du contexte, boucle agent, dictée, auto-tests
   tools/    outils natifs (fs, code, graphe, grep, shell, sécurité, web, compression)
   ui/       interface egui (thème, sidebar, explorateur/onglets, chat, composer, planificateur, panneau outils, réglages)
 ```

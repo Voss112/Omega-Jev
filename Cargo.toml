@@ -1,6 +1,6 @@
 [package]
 name = "omega"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 description = "Omega — agent IA local et anonyme : Jev (System One) route, DeepSeek V4.1 Flash ou Claude (System Two) exécute"
 license = "MIT"
@@ -10,11 +10,17 @@ publish = false
 # UI
 eframe = "0.37"
 egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark", "better_syntax_highlighting"] }
+# Repérage des tableaux markdown (même version qu'egui_commonmark : rien de plus à compiler)
+pulldown-cmark = { version = "0.13", default-features = false }
 rfd = "0.17"
 open = "5"
 # Images collées / déposées (arboard est déjà tiré par egui pour le presse-papiers texte)
 arboard = { version = "3", features = ["image-data"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+# Dictée vocale locale : micro (WASAPI) + Whisper (whisper.cpp), rien ne quitte la machine
+cpal = "0.18"
+# Copie de whisper-rs 0.16.0 : seul changement, le type des enums C sous Windows/MinGW (voir vendor/README.md)
+whisper-rs = { path = "vendor/whisper-rs", features = ["vulkan"] }
 
 # Runtime & réseau
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }

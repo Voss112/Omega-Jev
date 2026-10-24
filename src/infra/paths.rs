@@ -23,6 +23,11 @@ pub fn web_cache() -> PathBuf {
     root().join("web")
 }
 
+/// Local speech-to-text models (Whisper).
+pub fn models() -> PathBuf {
+    root().join("models")
+}
+
 /// Default sandbox when the user has not picked a project folder; kept apart from the data dir (API keys).
 pub fn workspace() -> PathBuf {
     dirs::document_dir().map_or_else(|| root().join("workspace"), |d| d.join("Omega"))

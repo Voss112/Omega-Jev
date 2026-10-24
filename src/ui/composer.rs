@@ -8,7 +8,7 @@ use eframe::egui::{
 use super::{
     App, attach,
     chat::column,
-    fx,
+    dictation, fx,
     icons::{self, Icon},
     theme::{self, ACCENT, ACCENT_HI, AMBER, CYAN, FAINT, INDIGO, MUTED, RED, SOFT, TEXT},
     widgets,
@@ -32,6 +32,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let mut cancel_edit = false;
     let mut schedule = false;
     let mut pick = false;
+    let mut dictate = false;
     let ctx = ui.ctx().clone();
     let t = fx::now(&ctx);
     app.collect_images(&ctx);
@@ -87,6 +88,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                         {
                             pick = true;
                         }
+                        dictate = dictation::button(app, ui, t);
                         engine_picker(app, ui);
                         bypass_toggle(app, ui, t);
                         if widgets::pill(ui, Some(Icon::Clock), if compact { "" } else { "Programmer" }, MUTED, false)
@@ -147,7 +149,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     if schedule {
         app.open_schedule();
     }
-    if send {
+    if dictate {
+        app.toggle_dictation(&ctx);
+    }
+    if send && app.dictating() {
+        app.send_after_dictation();
+    } else if send {
         app.send();
     }
     if stop && let Some(id) = app.current {
@@ -192,8 +199,13 @@ fn editing_banner(ui: &mut Ui) -> bool {
 
 /// Keyboard hints under the box; trailing items drop out when the column is narrow.
 fn hints(ui: &mut Ui, style: &str) {
-    let items: [(&str, &str); 4] =
-        [("Entrée", "envoyer"), ("Maj+Entrée", "nouvelle ligne"), ("Ctrl+N", "nouvelle discussion"), ("Échap", "stop")];
+    let items: [(&str, &str); 5] = [
+        ("Entrée", "envoyer"),
+        ("Maj+Entrée", "nouvelle ligne"),
+        ("Ctrl+M", "dicter"),
+        ("Ctrl+N", "nouvelle discussion"),
+        ("Échap", "stop"),
+    ];
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
     let font = FontId::proportional(11.0);
     let key_font = FontId::monospace(10.0);

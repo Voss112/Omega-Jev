@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod fs;
 pub mod graph;
 pub mod guard;
+pub mod reads;
 pub mod rtk;
 pub mod schema;
 pub mod search;
@@ -37,6 +38,8 @@ pub struct ToolCtx<'a> {
     pub conv: Uuid,
     /// Turn key (checkpoint folder).
     pub turn: i64,
+    /// File ranges already on the wire, so an unchanged re-read costs a stub.
+    pub reads: &'a reads::Reads,
 }
 
 pub struct ToolOutput {
@@ -78,7 +81,17 @@ async fn exec(ctx: &ToolCtx<'_>, kind: ToolKind, a: Args<'_>) -> Result<ToolOutp
         }
         ToolKind::ReadFile => {
             let (path, start, end) = (a.str("path")?, a.num("start"), a.num("end"));
-            blocking(move || fs::read(&root, &path, start, end)).await
+            let key = reads::key(&path, start, end);
+            match ctx.reads.unchanged(&root, &key) {
+                Some(stub) => Ok(stub),
+                None => {
+                    let out = blocking(move || fs::read(&root, &path, start, end)).await;
+                    if out.is_ok() {
+                        ctx.reads.record(key);
+                    }
+                    out
+                }
+            }
         }
         ToolKind::Outline => {
             let path = a.opt("path").unwrap_or_else(|| ".".into());

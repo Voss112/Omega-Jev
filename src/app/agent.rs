@@ -13,7 +13,7 @@ use crate::{
         tool::ToolKind,
     },
     infra::llm::{self, Delta},
-    tools::{self, ToolCtx, ToolOutput, checkpoint::Checkpoint, diagnostics},
+    tools::{self, ToolCtx, ToolOutput, checkpoint::Checkpoint, diagnostics, reads::Reads},
 };
 
 pub async fn run(mut conv: Conversation, env: Arc<Env>, emit: Emitter) {
@@ -67,7 +67,8 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
         emit.send(Event::Usage { conv: conv.id, usage: Usage::jev(jev_tokens) });
     }
 
-    let ctx = ToolCtx { env, root, emit, conv: conv.id, turn };
+    let reads = Reads::from_history(&conv.messages[visible..]);
+    let ctx = ToolCtx { env, root, emit, conv: conv.id, turn, reads: &reads };
     for _ in 0..env.settings.max_steps.max(1) {
         let body = context::request(conv, env, &system, true);
         let done = match complete(env, emit, conv.id, &body).await {

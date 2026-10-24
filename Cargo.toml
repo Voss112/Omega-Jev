@@ -1,6 +1,6 @@
 [package]
 name = "omega"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2024"
 description = "Omega — agent IA local et anonyme : Jev (System One) route, DeepSeek V4.1 Flash ou Claude (System Two) exécute"
 license = "MIT"

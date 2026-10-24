@@ -6,7 +6,7 @@ Tout tient dans un seul binaire (Windows et Linux), sans serveur externe ni tél
 
 ## Démarrage
 
-1. Windows : double-cliquer `Omega-0.9.0-x64.msi` (installation par utilisateur, sans droits admin, raccourci Bureau). Linux : `target/release/omega`.
+1. Windows : double-cliquer `Omega-0.9.1-x64.msi` (installation par utilisateur, sans droits admin, raccourci Bureau). Linux : `target/release/omega`.
 2. Au premier lancement, la fenêtre ⚙ Paramètres s'ouvre. Coller la clé **DeepSeek** (platform.deepseek.com) et la clé **Jev** (console.typesafe.ai ; sans elle, un routeur local prend le relais). Claude et Gemini passent par l'abonnement (bouton « Se connecter » : Claude Pro/Max, Google AI Pro/Ultra via l'**Antigravity CLI** `agy` — bouton « Installer Antigravity (agy) et se connecter » ; Google a fermé Gemini Code Assist aux comptes personnels en juin 2026, Code Assist reste pour les projets Google Cloud) ou une clé API. GitHub se connecte au même endroit (code à saisir sur github.com).
 3. Choisir un dossier de travail (📁 en bas à gauche). Par défaut : `Documents\Omega` (`~/Documents/Omega` sous Linux).
 

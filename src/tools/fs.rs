@@ -21,6 +21,8 @@ fn walker(dir: &Path) -> WalkBuilder {
     b.hidden(true)
         .require_git(false)
         .max_filesize(Some(2 << 20))
+        // Same tree → same bytes: tool outputs stay deterministic (and cache-friendly).
+        .sort_by_file_name(std::ffi::OsStr::cmp)
         .filter_entry(|e| !e.file_name().to_str().is_some_and(|n| SKIP_DIRS.contains(&n)));
     b
 }

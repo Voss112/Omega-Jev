@@ -111,19 +111,42 @@ pub fn clip(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// TOON: `name[N]{a,b}:` header, then one comma row per item (~40% fewer tokens than JSON).
+/// TOON, tab-delimited (spec §11): `name[N\t]{a\tb}:` header, then one tab row per item. Commas in code stay raw,
+/// so quoting is rare (~40-50 % fewer tokens than JSON).
 pub fn toon(name: &str, fields: &[&str], rows: &[Vec<String>]) -> String {
-    let mut out = format!("{name}[{}]{{{}}}:", rows.len(), fields.join(","));
+    let mut out = format!("{name}[{}\t]{{{}}}:", rows.len(), fields.join("\t"));
     for row in rows {
         out.push_str("\n  ");
-        out.push_str(&row.iter().map(|v| cell(v)).collect::<Vec<_>>().join(","));
+        for (i, v) in row.iter().enumerate() {
+            if i > 0 {
+                out.push('\t');
+            }
+            push_cell(&mut out, v);
+        }
     }
     out
 }
 
-fn cell(v: &str) -> String {
-    let needs_quotes = v.is_empty() || v.contains([',', '"', '\n']) || v.starts_with(' ') || v.ends_with(' ');
-    if needs_quotes { format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")) } else { v.to_owned() }
+/// Quoted only when the raw value would break the row (the reader is a model, not a strict decoder).
+fn push_cell(out: &mut String, v: &str) {
+    let needs_quotes =
+        v.is_empty() || v.contains(['\t', '\n', '\r']) || v.starts_with([' ', '"']) || v.ends_with(' ');
+    if !needs_quotes {
+        out.push_str(v);
+        return;
+    }
+    out.push('"');
+    for c in v.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 pub fn self_test() -> Result<String> {
@@ -139,6 +162,23 @@ pub fn toon_self_test() -> Result<String> {
     let json: Vec<serde_json::Value> =
         rows.iter().map(|r| serde_json::json!({ "file": r[0], "line": r[1], "code": r[2] })).collect();
     let json_len = serde_json::to_string(&json)?.len();
-    ensure!(encoded.starts_with("hits[20]{file,line,code}:"), "en-tête TOON invalide");
+    ensure!(encoded.starts_with("hits[20\t]{file\tline\tcode}:"), "en-tête TOON invalide");
     Ok(format!("-{}% vs JSON", 100 - encoded.len() * 100 / json_len))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toon_rows_are_tab_separated_and_commas_stay_raw() {
+        let out = toon("m", &["a", "b"], &[vec!["x, y".into(), "f(\"z\")".into()]]);
+        assert_eq!(out, "m[1\t]{a\tb}:\n  x, y\tf(\"z\")");
+    }
+
+    #[test]
+    fn toon_quotes_only_what_would_break_a_row() {
+        let out = toon("m", &["a"], &[vec!["a\tb".into()], vec![String::new()], vec!["\"q".into()], vec![" pad".into()]]);
+        assert_eq!(out, "m[4\t]{a}:\n  \"a\\tb\"\n  \"\"\n  \"\\\"q\"\n  \" pad\"");
+    }
 }

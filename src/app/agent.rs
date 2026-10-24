@@ -6,7 +6,7 @@ use anyhow::{Result, bail, ensure};
 use futures_util::future::join_all;
 use uuid::Uuid;
 
-use super::{Emitter, Env, Event, compact, context, prompts, router, savings};
+use super::{Emitter, Env, Event, clear, compact, context, prompts, router, savings};
 use crate::{
     domain::{
         chat::{Conversation, Message, ToolCall, Usage},
@@ -14,7 +14,7 @@ use crate::{
         settings::Settings,
         tool::ToolKind,
     },
-    infra::llm::{self, Delta},
+    infra::llm::{self, Delta, Llm},
     tools::{self, ToolCtx, ToolOutput, checkpoint::Checkpoint, diagnostics, reads::Reads},
 };
 
@@ -77,13 +77,14 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
     let images = conv.messages.last().is_some_and(|m| !m.images.is_empty());
     if let Some(helper) = env.helper.as_ref().filter(|_| pick(&route, &env.settings, true, images) == Pick::Helper) {
         let before = conv.messages.len();
-        match steps(conv, &env.with_llm(helper.clone()), emit, turn, &system, &reads).await {
+        let helper = routed_effort(helper, &env.settings, &route).unwrap_or_else(|| helper.clone());
+        match steps(conv, &env.with_llm(helper), emit, turn, &system, &reads).await {
             // The helper failed before answering anything: the main engine takes the turn over.
             Err(_) if conv.messages.len() == before => {}
             done => return done,
         }
     }
-    let tuned = tuned(env, &route);
+    let tuned = routed_effort(&env.llm, &env.settings, &route).map(|llm| env.with_llm(llm));
     steps(conv, tuned.as_ref().unwrap_or(env), emit, turn, &system, &reads).await
 }
 
@@ -99,19 +100,20 @@ fn pick(route: &Route, settings: &Settings, helper: bool, images: bool) -> Pick 
     if settings.delegate && helper && !images && route.delegable() { Pick::Helper } else { Pick::Main }
 }
 
-/// The main engine at Jev's effort, when it is lower than the user's and changing it keeps the cache.
-fn tuned(env: &Env, route: &Route) -> Option<Env> {
-    if !env.settings.auto_effort || !env.llm.effort_keeps_cache() {
+/// `llm` (main engine or helper) at Jev's effort, when it is lower than the user's and changing it keeps the cache.
+fn routed_effort(llm: &Llm, settings: &Settings, route: &Route) -> Option<Llm> {
+    if !settings.auto_effort || !llm.effort_keeps_cache() {
         return None;
     }
-    let effort = route.effort_cap(env.llm.effort);
-    (effort != env.llm.effort).then(|| env.with_llm(env.llm.with_effort(effort)))
+    let effort = route.effort_cap(llm.effort);
+    (effort != llm.effort).then(|| llm.with_effort(effort))
 }
 
 /// The tool loop: stream, run the calls, repeat until an answer without calls.
 async fn steps(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64, system: &str, reads: &Reads) -> Result<()> {
     let ctx = ToolCtx { env, root: env.workspace(), emit, conv: conv.id, turn, reads };
     for _ in 0..env.settings.max_steps.max(1) {
+        clear_if_over_budget(conv, env, emit, reads);
         let body = context::request(conv, env, system, true);
         let done = match complete(env, emit, conv.id, &body).await {
             // Mid-conversation tool changes refused (model, account or beta): classic tools for the rest of the session.
@@ -146,6 +148,18 @@ async fn steps(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64, sy
         run_tools(conv, &ctx, &calls).await;
     }
     bail!("Limite de {} étapes atteinte — envoyez « continue » pour poursuivre.", env.settings.max_steps)
+}
+
+/// Past the context budget mid-turn, the oldest bulky tool results leave the wire (compaction waits for the next turn).
+fn clear_if_over_budget(conv: &mut Conversation, env: &Env, emit: &Emitter, reads: &Reads) {
+    let indices = clear::plan(conv, env.settings.compact_at, conv.savings.ratio());
+    if indices.is_empty() {
+        return;
+    }
+    clear::apply(conv, &indices);
+    let visible = conv.summary.as_ref().map_or(0, |s| s.upto).min(conv.messages.len());
+    reads.refresh(&conv.messages[visible..]);
+    emit.send(Event::Cleared { conv: conv.id, indices });
 }
 
 /// What signed reasoning is bound to besides the history: the system prompt and the `tools` array actually sent.
@@ -221,7 +235,7 @@ fn commit(conv: &mut Conversation, emit: &Emitter, msg: Message) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{route::Source, skill::Skill};
+    use crate::domain::{engine::Effort, route::Source, skill::Skill};
 
     fn simple() -> Route {
         Route {
@@ -247,5 +261,17 @@ mod tests {
         assert_eq!(pick(&simple(), &s, false, false), Pick::Main, "helper absent");
         assert_eq!(pick(&simple(), &Settings { delegate: false, ..s.clone() }, true, false), Pick::Main);
         assert_eq!(pick(&Route { code: 0.9, ..simple() }, &s, true, false), Pick::Main);
+    }
+
+    #[test]
+    fn the_delegated_helper_follows_the_effort_jev_estimated() {
+        let s = Settings::default();
+        let http = crate::infra::http::client("").unwrap();
+        let helper = Llm::new(http, &s, crate::domain::engine::Engine::DeepSeek).with_effort(Effort::High);
+        let easy = Route { effort: Some(0.1), ..simple() };
+        assert_eq!(routed_effort(&helper, &s, &easy).map(|l| l.effort), Some(Effort::Low));
+        assert!(routed_effort(&helper, &Settings { auto_effort: false, ..s.clone() }, &easy).is_none());
+        let hard = Route { effort: Some(0.9), ..simple() };
+        assert!(routed_effort(&helper, &s, &hard).is_none(), "jamais au-dessus du choix de l'utilisateur");
     }
 }

@@ -46,7 +46,8 @@ impl Reads {
                 continue;
             }
             let Some(result) = results.get(call.id.as_str()) else { continue };
-            if result.content.starts_with("ERROR:") || result.content.starts_with(STUB) {
+            // A cleared result is no longer on the wire: a re-read must return the text.
+            if result.cleared || result.content.starts_with("ERROR:") || result.content.starts_with(STUB) {
                 continue;
             }
             let args: Value = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
@@ -73,6 +74,12 @@ impl Reads {
 
     pub fn record(&self, key: ReadKey) {
         self.seen.lock().unwrap_or_else(PoisonError::into_inner).insert(key, Utc::now());
+    }
+
+    /// Rebuilt from the history after results were cleared mid-turn.
+    pub fn refresh(&self, messages: &[Message]) {
+        let fresh = Self::from_history(messages).seen.into_inner().unwrap_or_else(PoisonError::into_inner);
+        *self.seen.lock().unwrap_or_else(PoisonError::into_inner) = fresh;
     }
 }
 
@@ -124,6 +131,17 @@ mod tests {
         let root = workspace("range");
         let reads = Reads::from_history(&history(r#"{"path":"a.rs","start":1,"end":9}"#, "    1  fn main() {}"));
         assert_eq!(reads.unchanged(&root, &key("a.rs", Some(10), None)), None);
+    }
+
+    #[test]
+    fn a_read_cleared_mid_turn_is_sent_again() {
+        let root = workspace("cleared");
+        let mut msgs = history(r#"{"path":"a.rs"}"#, "    1  fn main() {}");
+        let reads = Reads::from_history(&msgs);
+        assert!(reads.unchanged(&root, &key("a.rs", None, None)).is_some());
+        msgs[1].cleared = true;
+        reads.refresh(&msgs);
+        assert_eq!(reads.unchanged(&root, &key("a.rs", None, None)), None, "le texte n'est plus sur le fil");
     }
 
     #[test]

@@ -67,6 +67,11 @@ impl App {
                         c.context = 0;
                     }
                 }
+                Event::Cleared { conv, indices } => {
+                    if let Some(c) = self.conv_mut(conv) {
+                        crate::app::clear::apply(c, &indices);
+                    }
+                }
                 Event::Done { conv, error } => {
                     if self.live.remove(&conv).is_none() {
                         continue;

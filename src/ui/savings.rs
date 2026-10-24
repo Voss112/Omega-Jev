@@ -93,6 +93,7 @@ fn ledger_grid(ui: &mut Ui, l: &Ledger, jev: u64, convs: usize) {
         line("Évité · RTK (sorties shell)", format!("−{}", h(l.rtk)));
         line("Évité · playbooks non renvoyés", format!("−{}", h(l.playbook)));
         line("Évité · compaction", format!("−{}", h(l.summary)));
+        line("Évité · résultats effacés", format!("−{}", h(l.cleared)));
         line("Remise · cache préfixe", format!("−{} équiv.", h(l.cache_saved().max(0.0) as u64)));
         line("Sans Omega ni cache", format!("{} tokens plein tarif", h(l.baseline() as u64)));
         line("Sans leviers (cache gardé)", format!("{} équiv.", h(l.without_levers() as u64)));

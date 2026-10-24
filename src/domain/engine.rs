@@ -7,7 +7,7 @@ pub enum Wire {
     Anthropic,
 }
 
-/// Reasoning budget. `Off` sends no reasoning parameter at all. Ordered from least to most reasoning.
+/// Reasoning budget. `Off` turns thinking off wherever the model allows it. Ordered from least to most reasoning.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Effort {
@@ -67,7 +67,7 @@ impl Effort {
     }
 }
 
-/// System Two engines. Effort is chosen by the user, never by the router.
+/// System Two engines. Effort is chosen by the user; Jev may only lower it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Engine {

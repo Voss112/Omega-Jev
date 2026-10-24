@@ -163,7 +163,8 @@ fn wire(m: &Message, target: Target) -> Value {
             v
         }
         Role::Tool => {
-            json!({ "role": "tool", "tool_call_id": m.tool_call_id, "content": m.content })
+            let content = if m.cleared { super::clear::stub(m) } else { m.content.clone() };
+            json!({ "role": "tool", "tool_call_id": m.tool_call_id, "content": content })
         }
     }
 }

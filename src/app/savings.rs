@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Result, ensure};
 use serde_json::Value;
 
-use super::{Env, context, router};
+use super::{Env, clear, context, router};
 use crate::{
     domain::{
         auth::AuthMode,
@@ -36,6 +36,7 @@ pub fn measure(conv: &Conversation, env: &Env, body: &Value, usage: &Usage) -> S
         summary: conv.summary.as_ref().map_or(0, |s| {
             conv.messages[..from].iter().map(message_bytes).sum::<u64>().saturating_sub(s.text.len() as u64)
         }),
+        cleared: clear::saved_bytes(visible),
     };
     Sample {
         prompt: usage.prompt,

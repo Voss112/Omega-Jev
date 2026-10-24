@@ -101,6 +101,9 @@ pub struct Message {
     /// Tool messages: bytes the RTK compressor removed from the raw output (economy ledger).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rtk: u64,
+    /// Tool messages: replaced on the wire by a one-line stub to keep the context under budget (the UI keeps the text).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleared: bool,
     /// User messages: files changed during this turn can be restored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub checkpoint: bool,
@@ -127,6 +130,7 @@ impl Message {
             route: None,
             diff: None,
             rtk: 0,
+            cleared: false,
             checkpoint: false,
             engine: None,
             model: String::new(),

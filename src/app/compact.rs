@@ -8,7 +8,10 @@ use serde_json::json;
 
 use super::{Emitter, Env, Event, savings};
 use crate::{
-    domain::chat::{Conversation, Role, Summary},
+    domain::{
+        chat::{Conversation, Role, Summary},
+        engine::Effort,
+    },
     tools::compress::clip,
 };
 
@@ -32,7 +35,8 @@ pub async fn maybe(conv: &mut Conversation, env: &Env, emit: &Emitter) -> Result
     }
     let messages =
         vec![json!({ "role": "system", "content": PROMPT }), json!({ "role": "user", "content": transcript(conv, from, upto) })];
-    let llm = env.summarizer();
+    // Summarizing needs no reasoning: thinking off (or the shortest a model allows) on whichever engine writes it.
+    let llm = &env.summarizer().with_effort(Effort::Off);
     let body = llm.body(&messages, None);
     let done = llm.stream(&body, |_| {}).await?;
     emit.send(Event::Usage { conv: conv.id, usage: done.usage });

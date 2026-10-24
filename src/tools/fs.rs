@@ -98,18 +98,35 @@ pub fn plan_write(root: &Path, rel: &str, content: String) -> Result<Change> {
     Ok(Change { action: format!("{verb} {rel}"), rel: rel.to_owned(), path, before, after: content })
 }
 
-pub fn plan_edit(root: &Path, rel: &str, old: &str, new: &str, all: bool) -> Result<Change> {
+pub fn plan_edit(root: &Path, rel: &str, old: &str, new: &str, all: bool, until: Option<&str>) -> Result<Change> {
     let path = guard::resolve_writable(root, rel)?;
     let text = read_text(&path)?;
     ensure!(!old.is_empty(), "`old` is empty");
-    let (old, new) = if text.contains("\r\n") && !old.contains('\r') {
-        (old.replace('\n', "\r\n"), new.replace('\n', "\r\n"))
-    } else {
-        (old.to_owned(), new.to_owned())
-    };
+    let crlf = text.contains("\r\n") && !old.contains('\r');
+    let native = |s: &str| if crlf { s.replace('\n', "\r\n") } else { s.to_owned() };
+    let (old, new) = (native(old), native(new));
     let count = text.matches(old.as_str()).count();
     ensure!(count > 0, "`old` not found in {rel}; re-read the file, whitespace must match exactly");
+    if let Some(until) = until.filter(|u| !u.is_empty()) {
+        ensure!(!all && count == 1, "with `until`, `old` must match once (it matches {count} times) and all=false");
+        let (start, end) = block(&text, &old, &native(until)).with_context(|| format!("`until` not found after `old` in {rel}"))?;
+        let lines = text[start..end].lines().count();
+        ensure!(lines <= MAX_BLOCK_LINES, "block of {lines} lines exceeds {MAX_BLOCK_LINES}; split the edit");
+        let after = format!("{}{new}{}", &text[..start], &text[end..]);
+        return Ok(Change { action: format!("edited {rel}: block of {lines} line(s) replaced"), rel: rel.to_owned(), path, before: Some(text), after });
+    }
     ensure!(count == 1 || all, "`old` matches {count} times; add context or set all=true");
     let after = if all { text.replace(&old, &new) } else { text.replacen(&old, &new, 1) };
     Ok(Change { action: format!("edited {rel}: {count} replacement(s)"), rel: rel.to_owned(), path, before: Some(text), after })
+}
+
+/// Longest block one `until` edit may replace: beyond, a wrong anchor would wipe too much unseen code.
+const MAX_BLOCK_LINES: usize = 300;
+
+/// Byte span from the start of `old` through the end of the first `until` after it.
+fn block(text: &str, old: &str, until: &str) -> Option<(usize, usize)> {
+    let start = text.find(old)?;
+    let tail = start + old.len();
+    let end = tail + text[tail..].find(until)? + until.len();
+    Some((start, end))
 }

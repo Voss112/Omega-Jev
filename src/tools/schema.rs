@@ -66,12 +66,13 @@ fn spec(kind: ToolKind) -> Value {
             ("Transitive callers/users of a symbol (depth 3): impact of changing it.", &[("name", "string", "Symbol name", true)])
         }
         ToolKind::EditFile => (
-            "Replace exact text in a file. `old` must be unique unless all=true.",
+            "Replace exact text in a file. `old` must be unique unless all=true. Long block: `old` = its first line(s), `until` = its last line(s).",
             &[
                 ("path", "string", "File", true),
-                ("old", "string", "Exact current text", true),
+                ("old", "string", "Exact current text (or start of the block)", true),
                 ("new", "string", "Replacement", true),
                 ("all", "boolean", "Replace all", false),
+                ("until", "string", "Exact end of the block to replace, after `old`", false),
             ],
         ),
         ToolKind::ReplaceSymbol => (

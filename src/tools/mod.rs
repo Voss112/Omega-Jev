@@ -110,8 +110,8 @@ async fn exec(ctx: &ToolCtx<'_>, kind: ToolKind, a: Args<'_>) -> Result<ToolOutp
             blocking(move || graph::blast_radius(&root, &name)).await
         }
         ToolKind::EditFile => {
-            let (path, old, new, all) = (a.str("path")?, a.str("old")?, a.str("new")?, a.flag("all"));
-            return change::apply(ctx, blocking(move || fs::plan_edit(&root, &path, &old, &new, all)).await?).await;
+            let (path, old, new, all, until) = (a.str("path")?, a.str("old")?, a.str("new")?, a.flag("all"), a.opt("until"));
+            return change::apply(ctx, blocking(move || fs::plan_edit(&root, &path, &old, &new, all, until.as_deref())).await?).await;
         }
         ToolKind::ReplaceSymbol => {
             let (path, name, code) = (a.str("path")?, a.str("name")?, a.str("code")?);
@@ -224,5 +224,22 @@ mod tests {
         assert!(super::code::plan_replace(&dir, "m.rs", "a", "fn a() -> u8 { 2 ").is_err());
         let change = super::code::plan_replace(&dir, "m.rs", "a", "fn a() -> u8 { 2 }").unwrap();
         assert!(change.after.contains("{ 2 }") && change.after.contains("fn b()"));
+    }
+
+    #[test]
+    fn edit_file_replaces_a_block_given_its_first_and_last_lines() {
+        let dir = std::env::temp_dir().join(format!("omega-test-until-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("m.rs"), "fn keep() {}\r\nfn old() {\r\n    a();\r\n    b();\r\n}\r\nfn tail() {}\r\n").unwrap();
+        let edit = |old: &str, until: Option<&str>| super::fs::plan_edit(&dir, "m.rs", old, "fn new() {}", false, until);
+        let change = edit("fn old() {", Some("    b();\n}")).unwrap();
+        assert_eq!(change.after, "fn keep() {}\r\nfn new() {}\r\nfn tail() {}\r\n", "bloc remplacé, CRLF respecté");
+        assert!(change.action.contains("4 line(s)"), "{}", change.action);
+        assert!(edit("fn old() {", Some("absent")).is_err(), "`until` introuvable");
+        assert!(edit("fn tail() {}", Some("fn keep()")).is_err(), "`until` doit suivre `old`");
+        assert!(edit("fn", Some("}")).is_err(), "`old` ambigu");
+        std::fs::write(dir.join("m.rs"), format!("start\n{}end\n", "x\n".repeat(400))).unwrap();
+        assert!(edit("start", Some("end")).is_err(), "bloc trop long");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

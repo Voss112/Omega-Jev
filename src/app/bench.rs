@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result, ensure};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
 
-use super::{Env, context, health::Health, prompts, router, savings};
+use super::{Env, bench_output, context, health::Health, prompts, router, savings};
 use crate::{
     domain::{
         chat::{Conversation, Message, Usage},
@@ -95,6 +95,9 @@ pub async fn run(env: &Env) -> Vec<Health> {
     rows.push(row("Cache préfixe (2 requêtes réelles)", cache(env, &llm, &mut spent).await));
     rows.push(row("Outils différés (tool_addition réel)", deferred(env, &llm, &mut spent).await));
     rows.push(row("Style de sortie (A/B réel)", style(env, &llm, &mut spent).await));
+    rows.push(row("Discipline de sortie (A/B boucle d'outils)", bench_output::discipline(env, &llm, &mut spent).await));
+    rows.push(row("DeepSeek Off (réflexion coupée)", bench_output::deepseek_off(env).await));
+    rows.push(row("Effacement en cours de tour (API réelle)", bench_output::clearing(env, &llm, &mut spent).await));
     let counting = if llm.wire() == Wire::Anthropic { "comptages count_tokens gratuits" } else { "comptages à 1 token de sortie" };
     rows.push(row(
         "Coût du banc",
@@ -196,7 +199,7 @@ async fn toon(llm: &Llm, spent: &mut u64) -> Result<String> {
     Ok(format!("30 résultats grep : JSON {j} → TOON {t} tokens (−{} %)", (j - t) * 100 / j))
 }
 
-fn used(spent: &mut u64, done: &Completion) -> Usage {
+pub(super) fn used(spent: &mut u64, done: &Completion) -> Usage {
     *spent += done.usage.prompt + done.usage.completion;
     done.usage
 }
@@ -291,7 +294,7 @@ async fn style(env: &Env, llm: &Llm, spent: &mut u64) -> Result<String> {
 }
 
 /// Tokens of the visible answer: counted exactly on Claude (its output usage includes thinking), usage minus reasoning elsewhere.
-async fn answer_tokens(llm: &Llm, done: &Completion, spent: &mut u64) -> Result<u64> {
+pub(super) async fn answer_tokens(llm: &Llm, done: &Completion, spent: &mut u64) -> Result<u64> {
     if llm.wire() == Wire::OpenAi {
         return Ok(done.usage.completion.saturating_sub(done.usage.reasoning));
     }

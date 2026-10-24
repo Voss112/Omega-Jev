@@ -25,7 +25,9 @@ pub fn body(model: &str, engine: Engine, effort: Effort, messages: &[Value], too
     }
     if engine == Engine::DeepSeek {
         body["max_tokens"] = json!(MAX_OUTPUT);
-        body["thinking"] = json!({ "type": "enabled" });
+        // Thinking is on by default (effort high): Off must disable it, or it is billed as high.
+        let mode = if effort == Effort::Off { "disabled" } else { "enabled" };
+        body["thinking"] = json!({ "type": mode });
     }
     if let Some(tools) = tools {
         body["tools"] = tools;
@@ -171,6 +173,9 @@ mod tests {
         let b = body("deepseek-flash", Engine::DeepSeek, Effort::Max, &[], Some(tools.clone()));
         assert_eq!(b["reasoning_effort"], "max");
         assert_eq!(b["tools"], tools);
-        assert!(body("deepseek-flash", Engine::DeepSeek, Effort::Off, &[], None).get("reasoning_effort").is_none());
+        assert_eq!(b["thinking"]["type"], "enabled");
+        let off = body("deepseek-flash", Engine::DeepSeek, Effort::Off, &[], None);
+        assert!(off.get("reasoning_effort").is_none());
+        assert_eq!(off["thinking"]["type"], "disabled", "Off coupe la réflexion (sinon facturée en high)");
     }
 }

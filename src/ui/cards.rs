@@ -83,6 +83,9 @@ pub fn tool_card(ui: &mut Ui, owner: usize, call: &ToolCall, result: Option<&Mes
                     if let Some(diff) = &m.diff {
                         diff_view(ui, diff);
                     }
+                    if m.cleared {
+                        ui.label(RichText::new("Effacé du contexte du modèle (budget dépassé) · conservé ici").size(11.5).color(FAINT));
+                    }
                     code_block(ui, RichText::new(clip(&m.content, 8000)).monospace().size(12.0).color(SOFT));
                 }
             });

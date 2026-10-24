@@ -46,6 +46,8 @@ pub struct Levers {
     pub playbook: u64,
     /// History replaced by the compaction summary.
     pub summary: u64,
+    /// Old tool results replaced by stubs mid-turn.
+    pub cleared: u64,
 }
 
 /// One request as measured: provider usage plus the levers' bytes.
@@ -86,6 +88,7 @@ pub struct Ledger {
     pub rtk: u64,
     pub playbook: u64,
     pub summary: u64,
+    pub cleared: u64,
     /// Input actually billed, in uncached-token equivalents (cache reads and writes weighted).
     pub billed: f64,
     /// Lever tokens priced at the effective rate of the request that avoided them
@@ -119,7 +122,7 @@ impl Ledger {
         let billed = fresh + s.cached as f64 * s.rates.read + s.written as f64 * s.rates.write;
         let rate = billed / s.prompt as f64;
         let l = &s.levers;
-        self.levers_billed += tokens(l.lazy + l.rtk + l.playbook + l.summary) as f64 * rate;
+        self.levers_billed += tokens(l.lazy + l.rtk + l.playbook + l.summary + l.cleared) as f64 * rate;
         self.jev_billed += tokens(l.lazy + l.playbook) as f64 * rate;
         self.requests += 1;
         self.prompt += s.prompt;
@@ -130,12 +133,13 @@ impl Ledger {
         self.rtk += tokens(s.levers.rtk);
         self.playbook += tokens(s.levers.playbook);
         self.summary += tokens(s.levers.summary);
+        self.cleared += tokens(s.levers.cleared);
         self.billed += billed;
     }
 
     /// Tokens the levers kept off the wire.
     pub fn levers(&self) -> u64 {
-        self.lazy + self.rtk + self.playbook + self.summary
+        self.lazy + self.rtk + self.playbook + self.summary + self.cleared
     }
 
     /// Input without any Omega lever and without cache, every token at full price.
@@ -173,6 +177,7 @@ impl std::ops::AddAssign for Ledger {
         self.rtk += o.rtk;
         self.playbook += o.playbook;
         self.summary += o.summary;
+        self.cleared += o.cleared;
         self.billed += o.billed;
         self.levers_billed += o.levers_billed;
         self.jev_billed += o.jev_billed;

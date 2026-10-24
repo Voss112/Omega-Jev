@@ -2,6 +2,8 @@
 
 pub mod agent;
 pub mod bench;
+mod bench_output;
+pub mod clear;
 pub mod compact;
 pub mod context;
 pub mod health;
@@ -146,6 +148,11 @@ pub enum Event {
     Compacted {
         conv: Uuid,
         summary: Summary,
+    },
+    /// Tool results (message indices) replaced on the wire by stubs mid-turn.
+    Cleared {
+        conv: Uuid,
+        indices: Vec<usize>,
     },
     Done {
         conv: Uuid,

@@ -49,6 +49,26 @@ pub struct Image {
     pub media: String,
     /// Base64 of the original bytes (resized client-side before storing).
     pub data: String,
+    /// Content hash, computed once: hashing megabytes of base64 on every frame costs milliseconds.
+    #[serde(skip)]
+    key: std::sync::OnceLock<u64>,
+}
+
+impl Image {
+    pub fn new(media: impl Into<String>, data: String) -> Self {
+        Self { media: media.into(), data, key: std::sync::OnceLock::new() }
+    }
+
+    /// Stable content hash (texture cache key).
+    pub fn key(&self) -> u64 {
+        *self.key.get_or_init(|| {
+            use std::hash::{DefaultHasher, Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            self.media.hash(&mut hasher);
+            self.data.hash(&mut hasher);
+            hasher.finish()
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

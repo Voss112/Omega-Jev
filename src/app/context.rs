@@ -166,7 +166,7 @@ mod tests {
     }
 
     fn screenshot() -> crate::domain::chat::Image {
-        crate::domain::chat::Image { media: "image/png".into(), data: "QUJD".into() }
+        crate::domain::chat::Image::new("image/png", "QUJD".into())
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod fx;
 mod icons;
 mod login;
 mod panel;
+mod pace;
 mod savings;
 mod schedule;
 mod settings;
@@ -47,8 +48,6 @@ const NOTICE_TTL: Duration = Duration::from_secs(8);
 const SIDEBAR_W: f32 = 284.0;
 const FILES_W: f32 = 262.0;
 const TOOLS_W: f32 = 312.0;
-/// Ambient animation rate while the window has focus.
-const FRAME: Duration = Duration::from_millis(33);
 const CHECKPOINT_MAX_AGE: Duration = Duration::from_hours(30 * 24);
 
 pub fn run() -> eframe::Result<()> {
@@ -126,6 +125,8 @@ pub struct App {
     shots: Vec<crate::domain::chat::Image>,
     /// Decoded thumbnails, keyed by image hash.
     tex: HashMap<u64, egui::TextureHandle>,
+    /// Conversation the textures were last pruned for.
+    tex_owner: Option<Uuid>,
     /// Live model list per provider, as returned by the account.
     catalog: HashMap<Engine, Vec<Choice>>,
     catalog_error: HashMap<Engine, String>,
@@ -181,6 +182,7 @@ impl App {
             schedule_error: None,
             shots: Vec::new(),
             tex: HashMap::new(),
+            tex_owner: None,
             catalog: HashMap::new(),
             catalog_error: HashMap::new(),
             model_input: None,
@@ -241,6 +243,16 @@ impl App {
         }
     }
 
+    /// GPU textures of other conversations are freed when the view switches.
+    fn evict_textures(&mut self) {
+        self.tex_owner = self.current;
+        let keep = match self.current_conv() {
+            Some(conv) => attach::image_keys(conv, &self.shots),
+            None => self.shots.iter().map(attach::key).collect(),
+        };
+        self.tex.retain(|k, _| keep.contains(k));
+    }
+
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::N)) {
             self.new_chat();
@@ -277,14 +289,21 @@ fn build_env(settings: &Settings, web: &Arc<WebIndex>) -> (Arc<Env>, Option<Stri
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.pump();
+        if self.tex_owner != self.current {
+            self.evict_textures();
+        }
         let ctx = ui.ctx().clone();
         self.shortcuts(&ctx);
         fx::backdrop(&ctx, ctx.content_rect(), fx::now(&ctx));
-        let (focused, minimized) = ctx.input(|i| (i.viewport().focused.unwrap_or(true), i.viewport().minimized.unwrap_or(false)));
-        if focused && !minimized {
-            ctx.request_repaint_after(FRAME);
-        } else if self.notice.is_some() {
-            ctx.request_repaint_after(Duration::from_secs(1));
+        let activity = ctx.input(|i| pace::Activity {
+            focused: i.viewport().focused.unwrap_or(true),
+            minimized: i.viewport().minimized.unwrap_or(false),
+            busy: !self.live.is_empty(),
+            animating: self.login.is_some() || self.bench_running || !i.raw.hovered_files.is_empty(),
+            timers: self.notice.is_some() || !self.jobs.is_empty(),
+        });
+        if let Some(delay) = pace::next_frame(activity) {
+            ctx.request_repaint_after(delay);
         }
 
         Panel::top("titlebar")
@@ -346,9 +365,6 @@ impl eframe::App for App {
         self.toast(&ctx, central);
         window::resize_edges(&ctx);
         self.fire_due_jobs();
-        if !self.jobs.is_empty() {
-            ctx.request_repaint_after(Duration::from_secs(1));
-        }
     }
 }
 

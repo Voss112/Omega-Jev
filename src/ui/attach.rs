@@ -1,8 +1,7 @@
 //! Images du chat : presse-papiers, glisser-déposer, redimensionnement et vignettes.
 
 use std::{
-    collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
+    collections::{HashMap, HashSet},
     path::Path,
 };
 
@@ -10,7 +9,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use eframe::egui::{ColorImage, Context, Event, Key, TextureHandle, TextureOptions, Ui, vec2};
 use image::{DynamicImage, ImageFormat};
 
-use crate::domain::chat::Image;
+use crate::domain::chat::{Conversation, Image};
 
 /// Beyond this the payload explodes and providers reject the request.
 pub const MAX_IMAGES: usize = 4;
@@ -49,7 +48,6 @@ fn decode(bytes: &[u8]) -> Result<DynamicImage, String> {
     reader.decode().map_err(|e| format!("image illisible : {e}"))
 }
 
-/// Clipboard image (Win+Shift+S screenshot ⇒ Ctrl+V here).
 /// Images pasted with Ctrl+V this frame.
 pub fn pasted(ctx: &Context) -> Vec<Result<Image, String>> {
     let (shots, files) = ctx.input(|i| {
@@ -102,9 +100,9 @@ fn encode(img: DynamicImage) -> Result<Image, String> {
         if buf.len() > MAX_BYTES {
             return Err("image trop lourde même après compression".into());
         }
-        return Ok(Image { media: "image/jpeg".into(), data: STANDARD.encode(&buf) });
+        return Ok(Image::new("image/jpeg", STANDARD.encode(&buf)));
     }
-    Ok(Image { media: "image/png".into(), data: STANDARD.encode(&buf) })
+    Ok(Image::new("image/png", STANDARD.encode(&buf)))
 }
 /// Bytes of image files dropped on the window during this frame.
 pub fn dropped(ctx: &Context) -> Vec<Result<Vec<u8>, String>> {
@@ -158,10 +156,12 @@ pub fn texture(ctx: &Context, cache: &mut HashMap<u64, TextureHandle>, img: &Ima
 }
 
 pub fn key(img: &Image) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    img.media.hash(&mut hasher);
-    img.data.hash(&mut hasher);
-    hasher.finish()
+    img.key()
+}
+
+/// Every image the current view can show: textures outside this set can be freed.
+pub fn image_keys(conv: &Conversation, shots: &[Image]) -> HashSet<u64> {
+    conv.messages.iter().flat_map(|m| &m.images).chain(shots).map(key).collect()
 }
 
 /// One thumbnail; returns `true` when its ✕ was clicked.
@@ -245,5 +245,14 @@ mod tests {
         let a = from_bytes(&png(2, 2)).unwrap();
         let b = from_bytes(&png(3, 2)).unwrap();
         assert_ne!(key(&a), key(&b));
+    }
+
+    #[test]
+    fn image_keys_cover_the_conversation_and_the_composer() {
+        let (a, b) = (from_bytes(&png(2, 2)).unwrap(), from_bytes(&png(3, 2)).unwrap());
+        let mut conv = crate::domain::chat::Conversation::default();
+        conv.push(crate::domain::chat::Message::user_with("x".into(), vec![a.clone()]));
+        let keys = image_keys(&conv, std::slice::from_ref(&b));
+        assert_eq!(keys, HashSet::from([key(&a), key(&b)]));
     }
 }

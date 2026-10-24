@@ -161,8 +161,30 @@ impl Emitter {
     }
 
     pub fn send(&self, event: Event) {
-        if self.tx.send(event).is_ok() {
+        // Streaming deltas ride the UI's 30 FPS busy cadence: waking per token would redraw at the token rate.
+        let wake = !matches!(event, Event::Delta { .. });
+        if self.tx.send(event).is_ok() && wake {
             (self.wake)();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[test]
+    fn deltas_do_not_wake_the_ui_but_other_events_do() {
+        let (tx, rx) = mpsc::channel();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = wakes.clone();
+        let emit = Emitter::new(tx, Arc::new(move || _ = counter.fetch_add(1, Ordering::SeqCst)));
+        emit.send(Event::Delta { conv: Uuid::nil(), text: "a".into(), reasoning: false });
+        assert_eq!(wakes.load(Ordering::SeqCst), 0);
+        emit.send(Event::Done { conv: Uuid::nil(), error: None });
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(rx.try_iter().count(), 2);
     }
 }

@@ -1,6 +1,6 @@
 //! Notification-area icon: its own thread runs a hidden window that receives clicks and the context menu.
 
-use std::sync::mpsc::Sender;
+use std::sync::{Arc, atomic::AtomicIsize, mpsc::Sender};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayEvent {
@@ -15,8 +15,10 @@ pub struct TrayIcon {
 }
 
 /// Shows the icon; each click or menu choice goes to `events`, then `wake` runs (repaint the UI).
-pub fn spawn(events: Sender<TrayEvent>, wake: Box<dyn Fn() + Send>) -> anyhow::Result<TrayIcon> {
-    platform::spawn(events, wake).map(|hwnd| TrayIcon { hwnd })
+/// `main` holds the app window handle (0 until known): "Open" restores it from the tray thread itself,
+/// since a hidden egui window no longer runs its frame loop.
+pub fn spawn(events: Sender<TrayEvent>, wake: Box<dyn Fn() + Send>, main: Arc<AtomicIsize>) -> anyhow::Result<TrayIcon> {
+    platform::spawn(events, wake, main).map(|hwnd| TrayIcon { hwnd })
 }
 
 impl Drop for TrayIcon {
@@ -29,7 +31,15 @@ impl Drop for TrayIcon {
 // The SINK thread-local is already `const`; the lint misfires inside the macro expansion.
 #[allow(clippy::missing_const_for_thread_local)]
 mod platform {
-    use std::{cell::RefCell, sync::mpsc, sync::mpsc::Sender, thread};
+    use std::{
+        cell::RefCell,
+        sync::{
+            Arc,
+            atomic::{AtomicIsize, Ordering},
+            mpsc::{self, Sender},
+        },
+        thread,
+    };
 
     use anyhow::{Result, anyhow};
     use windows_sys::Win32::{
@@ -40,8 +50,9 @@ mod platform {
             WindowsAndMessaging::{
                 AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
                 GetCursorPos, GetMessageW, HWND_MESSAGE, LoadIconW, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage,
-                RegisterClassW, SetForegroundWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP,
-                WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
+                RegisterClassW, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+                TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
+                WNDCLASSW,
             },
         },
     };
@@ -55,6 +66,7 @@ mod platform {
     struct Sink {
         events: Sender<TrayEvent>,
         wake: Box<dyn Fn() + Send>,
+        main: Arc<AtomicIsize>,
     }
 
     thread_local! {
@@ -67,17 +79,25 @@ mod platform {
 
     fn emit(event: TrayEvent) {
         SINK.with_borrow(|s| {
-            if let Some(s) = s {
-                let _ = s.events.send(event);
-                (s.wake)();
+            let Some(s) = s else { return };
+            let main = s.main.load(Ordering::Acquire);
+            if event == TrayEvent::Open && main != 0 {
+                // SAFETY: plain calls on a top-level window handle; a stale handle only makes them fail.
+                unsafe {
+                    ShowWindow(main as HWND, SW_SHOW);
+                    ShowWindow(main as HWND, SW_RESTORE);
+                    SetForegroundWindow(main as HWND);
+                }
             }
+            let _ = s.events.send(event);
+            (s.wake)();
         });
     }
 
-    pub fn spawn(events: Sender<TrayEvent>, wake: Box<dyn Fn() + Send>) -> Result<isize> {
+    pub fn spawn(events: Sender<TrayEvent>, wake: Box<dyn Fn() + Send>, main: Arc<AtomicIsize>) -> Result<isize> {
         let (ready, created) = mpsc::channel();
         thread::Builder::new().name("tray".into()).spawn(move || {
-            SINK.with_borrow_mut(|s| *s = Some(Sink { events, wake }));
+            SINK.with_borrow_mut(|s| *s = Some(Sink { events, wake, main }));
             let hwnd = create();
             let _ = ready.send(hwnd);
             if hwnd.is_some() {
@@ -208,11 +228,11 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    use std::sync::mpsc::Sender;
+    use std::sync::{Arc, atomic::AtomicIsize, mpsc::Sender};
 
     use super::TrayEvent;
 
-    pub fn spawn(_: Sender<TrayEvent>, _: Box<dyn Fn() + Send>) -> anyhow::Result<isize> {
+    pub fn spawn(_: Sender<TrayEvent>, _: Box<dyn Fn() + Send>, _: Arc<AtomicIsize>) -> anyhow::Result<isize> {
         anyhow::bail!("zone de notification non prise en charge")
     }
 

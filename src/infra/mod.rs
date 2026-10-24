@@ -5,6 +5,7 @@ pub mod autostart;
 pub mod http;
 pub mod jev;
 pub mod llm;
+pub mod memory;
 pub mod paths;
 pub mod process;
 pub mod secret;

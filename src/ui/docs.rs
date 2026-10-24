@@ -41,18 +41,9 @@ pub fn dropped(ctx: &Context, is_image: impl Fn(&Path) -> bool) -> Vec<Result<Do
             .dropped_files
             .iter()
             .filter(|f| !is_image(f.path()))
-            .map(|f| {
-                let path = f.path();
-                if path.is_file() {
-                    return from_path(path);
-                }
-                let name = path.display().to_string();
-                let bytes = f.bytes().map_err(|e| format!("{name} : {e}"))?;
-                if bytes.len() as u64 > MAX_BYTES {
-                    return Err(format!("{name} : fichier trop lourd ({} Ko max)", MAX_BYTES / 1024));
-                }
-                from_bytes(name, bytes.to_vec())
-            })
+            // Path-less drops (from a browser) are images or nothing worth inlining: attach handles the images.
+            .filter(|f| f.path().is_file())
+            .map(|f| from_path(f.path()))
             .collect()
     })
 }

@@ -1,6 +1,8 @@
 //! Right panel: subscription status and plan quotas of every connected engine (Claude, Gemini).
 
-use eframe::egui::{Align2, FontId, Sense, Ui, vec2};
+use std::time::{Duration, Instant};
+
+use eframe::egui::{Align2, Context, FontId, Sense, Ui, vec2};
 
 use super::{
     App,
@@ -9,6 +11,9 @@ use super::{
     widgets,
 };
 use crate::domain::auth::{Provider, Window};
+
+/// Quota refresh period of signed-in subscriptions.
+const REFRESH: Duration = Duration::from_secs(30);
 
 /// Providers worth a card: signed in, or the active engine when it can run on a subscription.
 fn shown(app: &App) -> Vec<Provider> {
@@ -48,9 +53,37 @@ fn card(app: &App, ui: &mut Ui, provider: Provider) {
         if let Some((windows, at)) = app.plan_usage.get(&provider) {
             ui.add_space(6.0);
             windows.iter().for_each(|w| quota(ui, w));
-            ui.label(widgets::text(format!("relevé il y a {} s", at.elapsed().as_secs()), 10.5, FAINT));
+            ui.label(widgets::text(format!("relevé {}", ago(at.elapsed().as_secs())), 10.5, FAINT));
         }
     });
+}
+
+impl App {
+    /// Re-reads the quotas of every signed-in subscription every `REFRESH` (one request in flight per provider).
+    pub(super) fn poll_plan_usage(&mut self, ctx: &Context) {
+        let due: Vec<Provider> = Provider::ENGINES
+            .into_iter()
+            .filter(|p| self.accounts.contains_key(p))
+            .filter(|p| self.usage_polled.get(p).is_none_or(|at| at.elapsed() >= REFRESH))
+            .collect();
+        for provider in due {
+            self.usage_polled.insert(provider, Instant::now());
+            self.fetch_plan_usage(provider);
+        }
+        if !self.accounts.is_empty() {
+            ctx.request_repaint_after(REFRESH);
+        }
+    }
+}
+
+/// "à l'instant", "il y a 12 s", "il y a 3 min", "il y a 2 h".
+fn ago(secs: u64) -> String {
+    match secs {
+        0..5 => "à l'instant".to_owned(),
+        5..60 => format!("il y a {secs} s"),
+        60..3600 => format!("il y a {} min", secs / 60),
+        _ => format!("il y a {} h", secs / 3600),
+    }
 }
 
 fn quota(ui: &mut Ui, w: &Window) {
@@ -69,5 +102,18 @@ fn level(fraction: f32) -> eframe::egui::Color32 {
         AMBER
     } else {
         CYAN
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ago;
+
+    #[test]
+    fn age_reads_in_the_right_unit() {
+        assert_eq!(ago(2), "à l'instant");
+        assert_eq!(ago(42), "il y a 42 s");
+        assert_eq!(ago(150), "il y a 2 min");
+        assert_eq!(ago(5778), "il y a 1 h");
     }
 }

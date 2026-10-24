@@ -36,6 +36,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         tools(app, ui);
         live_tests(app, ui);
+        super::memory::show(app, ui, heading);
         engine(app, ui);
         network(app, ui);
         economy(app, ui);

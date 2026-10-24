@@ -249,6 +249,8 @@ impl App {
             }
         }
         self.save(id);
+        // Stopped by hand: unread forced messages return to the queue, which stays paused.
+        self.turn_ended(id, true);
     }
 
     pub(super) fn apply_settings(&mut self, settings: Settings) {

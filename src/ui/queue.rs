@@ -65,7 +65,7 @@ impl App {
         }
         if failed {
             if !queue.is_empty() {
-                self.notify("Tour en erreur : la file d'attente est en pause");
+                self.notify("Tour interrompu : la file d'attente est en pause (Envoyer pour reprendre)");
             }
             return;
         }

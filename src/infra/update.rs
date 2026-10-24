@@ -81,6 +81,12 @@ pub async fn fetch(http: &Client, current: &str, dir: &Path) -> Result<Option<Pa
         bail!("empreinte SHA-256 du MSI invalide : mise à jour ignorée");
     }
     std::fs::create_dir_all(dir)?;
+    // Only the newest installer is kept.
+    for old in std::fs::read_dir(dir)?.flatten() {
+        if old.file_name().to_string_lossy().starts_with("Omega-update-") {
+            let _ = std::fs::remove_file(old.path());
+        }
+    }
     // Fixed local name: the remote asset name never reaches the file system or the command line.
     let path = dir.join(format!(
         "Omega-update-{}.msi",

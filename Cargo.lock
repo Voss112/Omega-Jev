@@ -3276,7 +3276,7 @@ dependencies = [
 
 [[package]]
 name = "omega"
-version = "0.9.6"
+version = "0.9.7"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3296,6 +3296,7 @@ dependencies = [
  "open",
  "petgraph",
  "pulldown-cmark",
+ "raw-window-handle",
  "regex",
  "reqwest",
  "rfd",

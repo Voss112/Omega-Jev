@@ -86,7 +86,10 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
         m.tools_added.clone_from(&tools_added);
     }
     // Frozen for the whole turn: the tool loop then only appends, which Claude's signed reasoning requires.
-    let system = prompts::system(&env.settings, &root);
+    let mut system = prompts::system(&env.settings, &root);
+    if let Some(memory) = crate::infra::memory::prompt(&crate::infra::memory::dir()) {
+        system.push_str(&memory);
+    }
     // A new system prompt or tool set voids the reasoning signed before it: drop it as a leading run, once.
     // Deferred mode ships every tool on every request, so only the system prompt matters there.
     let prefix = wire_prefix(env, &system, conv);

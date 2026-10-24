@@ -1,6 +1,10 @@
 //! Notification-area icon and Windows start-up, kept in line with the settings.
 
-use std::sync::mpsc::{self, Receiver};
+use std::sync::{
+    Arc,
+    atomic::{AtomicIsize, Ordering},
+    mpsc::{self, Receiver},
+};
 
 use eframe::egui::{Context, ViewportCommand};
 
@@ -15,6 +19,8 @@ pub struct Tray {
     events: Receiver<TrayEvent>,
     /// "Quitter" chosen: the next close request really exits.
     quitting: bool,
+    /// Native handle of the main window, shared with the tray thread.
+    main: Arc<AtomicIsize>,
 }
 
 /// Launched by the Run key at logon: start hidden in the tray.
@@ -39,8 +45,11 @@ impl App {
     }
 
     /// Tray clicks, and the window close button hiding to the tray instead of quitting.
-    pub(super) fn pump_tray(&mut self, ctx: &Context) {
+    pub(super) fn pump_tray(&mut self, ctx: &Context, frame: &eframe::Frame) {
         let Some(tray) = &mut self.tray else { return };
+        if let Some(hwnd) = native_handle(frame) {
+            tray.main.store(hwnd, Ordering::Release);
+        }
         while let Ok(event) = tray.events.try_recv() {
             match event {
                 TrayEvent::Open => {
@@ -61,11 +70,21 @@ impl App {
     }
 }
 
+/// Win32 handle of the eframe window, so the tray thread can show it while egui is asleep.
+fn native_handle(frame: &eframe::Frame) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match frame.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
+        _ => None,
+    }
+}
+
 fn spawn(ctx: &Context) -> Option<Tray> {
     let (tx, events) = mpsc::channel();
     let wake = ctx.clone();
-    match tray::spawn(tx, Box::new(move || wake.request_repaint())) {
-        Ok(icon) => Some(Tray { _icon: icon, events, quitting: false }),
+    let main = Arc::new(AtomicIsize::new(0));
+    match tray::spawn(tx, Box::new(move || wake.request_repaint()), main.clone()) {
+        Ok(icon) => Some(Tray { _icon: icon, events, quitting: false, main }),
         Err(e) => {
             eprintln!("{e:#}");
             None

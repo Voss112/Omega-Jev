@@ -15,6 +15,7 @@ mod fx;
 mod icons;
 mod login;
 mod markdown;
+mod memory;
 mod panel;
 mod pace;
 mod plans;
@@ -126,6 +127,8 @@ pub struct App {
     token_draft: String,
     /// Last fetched plan usage per subscription.
     plan_usage: HashMap<Provider, (Vec<Window>, Instant)>,
+    /// Last quota request per provider (success or not): paces the 30 s refresh.
+    usage_polled: HashMap<Provider, Instant>,
     /// Connected account per subscription, read once (decrypting credentials every frame is wasteful).
     accounts: HashMap<Provider, String>,
     scaler: scale::Scaler,
@@ -164,6 +167,8 @@ pub struct App {
     queue: HashMap<Uuid, std::collections::VecDeque<queue::Queued>>,
     /// Text files joined to the draft, inlined at send.
     docs: Vec<docs::Doc>,
+    /// Memory notes shown in the panel; `None` → re-read from disk.
+    memory_notes: Option<Vec<crate::infra::memory::Note>>,
     /// System tray icon (absent when disabled or unavailable).
     tray: Option<tray::Tray>,
     /// Settings changed: the tray icon is re-synced on the next frame (needs the egui context).
@@ -211,6 +216,7 @@ impl App {
             agy_installing: false,
             token_draft: String::new(),
             plan_usage: HashMap::new(),
+            usage_polled: HashMap::new(),
             accounts: HashMap::new(),
             scaler: scale::Scaler::default(),
             show_panel: true,
@@ -234,6 +240,7 @@ impl App {
             voice: None,
             queue: HashMap::new(),
             docs: Vec::new(),
+            memory_notes: None,
             tray: None,
             tray_sync: false,
             update: None,
@@ -249,10 +256,7 @@ impl App {
         if wants_agy && crate::infra::llm::agy::binary().is_none() {
             app.install_agy(true);
         }
-        let connected: Vec<Provider> = Provider::ENGINES.into_iter().filter(|p| app.accounts.contains_key(p)).collect();
-        for provider in connected {
-            app.fetch_plan_usage(provider);
-        }
+        // Quotas: first read on the first frame, then every 30 s (`poll_plan_usage`).
         // First launch, or nothing to run with. A missing Jev key is optional (local routing, chip in the top bar).
         if !app.env.llm.configured() || !paths::settings().exists() {
             app.settings_draft = Some(app.settings.clone());
@@ -364,10 +368,11 @@ fn build_env(settings: &Settings, web: &Arc<WebIndex>, inbox: &Inbox) -> (Arc<En
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.pump();
         let ctx = ui.ctx().clone();
-        self.pump_tray(&ctx);
+        self.pump_tray(&ctx, frame);
+        self.poll_plan_usage(&ctx);
         if std::mem::take(&mut self.tray_sync) {
             self.sync_tray(&ctx);
         }

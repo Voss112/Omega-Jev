@@ -306,6 +306,21 @@ impl App {
         });
     }
 
+    /// Google's installer, then a first `agy` run (browser sign-in), in a terminal the user sees.
+    pub(super) fn install_agy(&mut self) {
+        let script = format!(
+            r#"{}; Write-Host ''; Write-Host 'Connexion : une page Google va s''ouvrir. Une fois connecte, tapez /quit puis fermez cette fenetre.'; & "$env:LOCALAPPDATA\agy\bin\agy.exe""#,
+            crate::infra::llm::agy::INSTALL
+        );
+        let started = std::process::Command::new("cmd")
+            .args(["/c", "start", "Antigravity", "powershell", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", &script])
+            .spawn();
+        match started {
+            Ok(_) => self.notify("Installation d'Antigravity lancée — après la connexion, rouvrez ⚙ Paramètres et Enregistrez"),
+            Err(e) => self.notify(format!("Installation impossible : {e}")),
+        }
+    }
+
     pub(super) fn disconnect(&mut self, provider: Provider) {
         match crate::app::login::forget(provider) {
             Ok(()) => {

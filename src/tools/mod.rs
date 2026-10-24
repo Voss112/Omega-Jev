@@ -66,7 +66,10 @@ pub async fn run(ctx: &ToolCtx<'_>, call: &ToolCall) -> ToolOutput {
     let args: Value = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
     let (result, rtk) = compress::measured(async {
         match ToolKind::parse(&call.name) {
-            Some(kind) => exec(ctx, kind, Args(&args)).await,
+            Some(kind) => {
+                ctx.reads.ran(kind);
+                exec(ctx, kind, Args(&args)).await
+            }
             None => Err(anyhow!("unknown tool `{}`", call.name)),
         }
     })

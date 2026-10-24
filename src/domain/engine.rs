@@ -7,6 +7,8 @@ pub enum Wire {
     Anthropic,
     /// Gemini Code Assist (`v1internal`), subscription tokens only.
     Gemini,
+    /// Gemini through the Antigravity CLI (`agy`, personal plans): text in, text out, no tools.
+    Antigravity,
 }
 
 /// Reasoning budget. `Off` turns thinking off wherever the model allows it. Ordered from least to most reasoning.

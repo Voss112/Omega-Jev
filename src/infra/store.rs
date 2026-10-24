@@ -24,10 +24,11 @@ pub fn load_settings() -> (Settings, Option<String>) {
             return (Settings::default(), Some(notice));
         }
     };
-    let keys = [&s.deepseek_key, &s.claude_key, &s.jev_key];
+    let keys = [&s.deepseek_key, &s.claude_key, &s.gemini_key, &s.jev_key];
     let migrate = keys.iter().any(|k| !secret::is_sealed(k));
     s.deepseek_key = secret::open(&s.deepseek_key);
     s.claude_key = secret::open(&s.claude_key);
+    s.gemini_key = secret::open(&s.gemini_key);
     s.jev_key = secret::open(&s.jev_key);
     if migrate && cfg!(windows) {
         let _ = save_settings(&s);
@@ -44,6 +45,7 @@ fn sealed(settings: &Settings) -> Result<Settings> {
     Ok(Settings {
         deepseek_key: secret::seal(settings.deepseek_key.trim())?,
         claude_key: secret::seal(settings.claude_key.trim())?,
+        gemini_key: secret::seal(settings.gemini_key.trim())?,
         jev_key: secret::seal(settings.jev_key.trim())?,
         ..settings.clone()
     })
@@ -112,15 +114,16 @@ mod tests {
         let s = Settings {
             deepseek_key: "sk-deepseek-secret".into(),
             claude_key: "sk-ant-secret".into(),
+            gemini_key: "AIza-gemini-secret".into(),
             jev_key: "sk-jev-secret".into(),
             ..Settings::default()
         };
         let toml = toml::to_string_pretty(&super::sealed(&s).unwrap()).unwrap();
-        for needle in ["sk-deepseek-secret", "sk-ant-secret", "sk-jev-secret"] {
+        for needle in ["sk-deepseek-secret", "sk-ant-secret", "AIza-gemini-secret", "sk-jev-secret"] {
             assert!(!toml.contains(needle), "{needle} écrit en clair");
         }
         #[cfg(windows)]
-        assert_eq!(toml.matches("dpapi:").count(), 3, "trois clés scellées");
+        assert_eq!(toml.matches("dpapi:").count(), 4, "quatre clés scellées");
         #[cfg(not(windows))]
         let _ = &toml;
         assert!(toml.contains("claude_auth"));

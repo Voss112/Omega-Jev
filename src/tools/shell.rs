@@ -77,6 +77,12 @@ pub async fn gate(ctx: &ToolCtx<'_>, cmd: &str) -> Result<()> {
         // Bypass: no prompt and no Jev second opinion (saves a call per command).
         _ if ctx.env.settings.bypass => return Ok(()),
         Verdict::Risky(why) => Some(why.to_owned()),
+        // Text the model may have been fed (a web page) can hide in a comment: Jev's opinion is not enough.
+        Verdict::Unknown if cmd.contains('#') => Some("commentaire dans une commande non reconnue".to_owned()),
+        // After outside content, code the agent may have just written does not run unasked.
+        _ if ctx.reads.untrusted() && guard::runs_code(cmd) => {
+            Some("exécute du code après lecture de contenu web (injection possible)".to_owned())
+        }
         Verdict::Unknown => cached_verdict(ctx, cmd).await,
         Verdict::Safe => None,
     };

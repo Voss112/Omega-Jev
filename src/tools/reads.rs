@@ -3,7 +3,10 @@
 use std::{
     collections::HashMap,
     path::Path,
-    sync::{Mutex, PoisonError},
+    sync::{
+        Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use chrono::{DateTime, Utc};
@@ -25,7 +28,12 @@ const MARGIN_SECS: i64 = 2;
 #[derive(Default)]
 pub struct Reads {
     seen: Mutex<HashMap<ReadKey, DateTime<Utc>>>,
+    /// Web pages or third-party tool output reached the model: a prompt injection may now steer it.
+    untrusted: AtomicBool,
 }
+
+/// Tools whose output comes from outside the user's machine.
+const OUTSIDE: [ToolKind; 4] = [ToolKind::WebFetch, ToolKind::WebSearch, ToolKind::Kits, ToolKind::CliAnything];
 
 pub fn key(path: &str, start: Option<usize>, end: Option<usize>) -> ReadKey {
     let path = path.trim().replace('\\', "/");
@@ -41,6 +49,10 @@ impl Reads {
             .filter_map(|m| Some((m.tool_call_id.as_deref()?, m)))
             .collect();
         let mut seen = HashMap::new();
+        let untrusted = messages
+            .iter()
+            .flat_map(|m| &m.tool_calls)
+            .any(|c| ToolKind::parse(&c.name).is_some_and(|k| OUTSIDE.contains(&k)));
         for call in messages.iter().filter(|m| m.role == Role::Assistant).flat_map(|m| &m.tool_calls) {
             if ToolKind::parse(&call.name) != Some(ToolKind::ReadFile) {
                 continue;
@@ -55,7 +67,18 @@ impl Reads {
             let num = |k: &str| args[k].as_u64().map(|n| n as usize);
             seen.insert(key(path, num("start"), num("end")), result.at);
         }
-        Self { seen: Mutex::new(seen) }
+        Self { seen: Mutex::new(seen), untrusted: AtomicBool::new(untrusted) }
+    }
+
+    /// A tool of `kind` just ran: outside content may now be in the context.
+    pub fn ran(&self, kind: ToolKind) {
+        if OUTSIDE.contains(&kind) {
+            self.untrusted.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub fn untrusted(&self) -> bool {
+        self.untrusted.load(Ordering::Relaxed)
     }
 
     /// The stub when this exact range was read and the file has not been written since.
@@ -89,6 +112,18 @@ mod tests {
 
     use super::*;
     use crate::domain::chat::ToolCall;
+
+    #[test]
+    fn web_content_marks_the_turn_untrusted() {
+        let local = Reads::from_history(&[]);
+        local.ran(ToolKind::ReadFile);
+        assert!(!local.untrusted());
+        local.ran(ToolKind::WebFetch);
+        assert!(local.untrusted());
+        let call = ToolCall { id: "w".into(), name: "web_search".into(), ..ToolCall::default() };
+        let history = [Message::assistant(String::new(), String::new(), vec![call])];
+        assert!(Reads::from_history(&history).untrusted(), "un historique avec du web reste marqué");
+    }
 
     fn workspace(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("omega-reads-{name}-{}", std::process::id()));

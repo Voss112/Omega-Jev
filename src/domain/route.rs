@@ -68,7 +68,10 @@ impl Route {
     /// Lazy tool loading: only what this turn needs.
     pub fn tools(&self) -> BTreeSet<ToolKind> {
         let mut set: BTreeSet<ToolKind> = self.skill.tools().iter().copied().collect();
-        let extras: [(bool, &[ToolKind]); 7] = [
+        // The audit playbook writes findings.json and REPORT.md and installs its kit, whatever skill carries it.
+        let audit = self.playbook.as_deref() == Some("security-audit") || self.skill == Skill::Security;
+        let extras: [(bool, &[ToolKind]); 8] = [
+            (audit, &[ToolKind::AuditKit, ToolKind::SecurityScan, ToolKind::WriteFile, ToolKind::EditFile]),
             (self.needs_web(), ToolKind::WEB),
             (self.needs_web(), &[ToolKind::Kits]),
             (self.needs_code(), ToolKind::READ),
@@ -146,6 +149,17 @@ mod tests {
             routine: 0.0,
             design: 0.0,
         }
+    }
+
+    #[test]
+    fn the_audit_playbook_brings_its_tools_to_any_skill() {
+        let review = Route { skill: Skill::Review, playbook: Some("security-audit".into()), ..chat() };
+        let tools = review.tools();
+        for t in [ToolKind::AuditKit, ToolKind::WriteFile, ToolKind::SecurityScan] {
+            assert!(tools.contains(&t), "{t:?}");
+        }
+        assert!(Route { skill: Skill::Security, ..chat() }.tools().contains(&ToolKind::WriteFile));
+        assert!(!Route { skill: Skill::Review, ..chat() }.tools().contains(&ToolKind::WriteFile), "revue simple : lecture seule");
     }
 
     #[test]

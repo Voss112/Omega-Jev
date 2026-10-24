@@ -34,6 +34,7 @@ enum SubAction {
     UseToken,
     GitHubToken,
     Disconnect(Provider),
+    InstallAgy,
 }
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
@@ -110,6 +111,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         Some(SubAction::UseToken) => app.use_token(),
         Some(SubAction::GitHubToken) => app.use_github_token(),
         Some(SubAction::Disconnect(provider)) => app.disconnect(provider),
+        Some(SubAction::InstallAgy) => app.install_agy(),
         None => {}
     }
 }
@@ -157,6 +159,23 @@ fn form(
                     }
                 });
                 ui.end_row();
+                if provider == Provider::Gemini {
+                    ui.label(label("Antigravity"));
+                    ui.horizontal_wrapped(|ui| match crate::infra::llm::agy::binary() {
+                        Some(_) => {
+                            widgets::chip_icon(ui, Some(Icon::Check), "agy installé · abonnement Pro/Ultra (texte)", GREEN);
+                        }
+                        None => {
+                            if widgets::pill(ui, Some(Icon::Download), "Installer Antigravity (agy) et se connecter", SOFT, false)
+                                .on_hover_text("Google réserve désormais les abonnements personnels à l'Antigravity CLI")
+                                .clicked()
+                            {
+                                sub = Some(SubAction::InstallAgy);
+                            }
+                        }
+                    });
+                    ui.end_row();
+                }
                 if provider == Provider::Claude {
                     ui.label(label("Jeton longue durée"));
                     ui.horizontal(|ui| {

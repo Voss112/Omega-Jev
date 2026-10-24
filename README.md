@@ -31,7 +31,7 @@ Pick the provider, the exact model and the effort level right in the input box. 
 - **Safe edits** — every file is backed up before the agent writes it, one-click restore (↶), coloured diffs, automatic `cargo check` / `tsc` / `go vet` / `py_compile`.
 - **Token savings you can measure** — lazy tools, output compression, prompt caching and compaction, with real provider numbers.
 - **Built-in security audit** — 25 CWE rules in `security_scan` plus the Cloudflare `security-audit` skill.
-- **Subscriptions or API keys** — Claude Pro/Max, Google AI Pro/Ultra (Gemini Code Assist), or plain keys.
+- **Subscriptions or API keys** — Claude Pro/Max, Google AI Pro/Ultra through the **Antigravity CLI** (`agy`, text only — Google closed Gemini Code Assist to personal accounts in June 2026; Code Assist remains for Google Cloud projects), or plain keys.
 
 ## Install
 
@@ -69,7 +69,7 @@ Build from source (below). The usual X11/Wayland packages are required at runtim
 
 ### Delegation and cost control
 
-- **Delegation** — simple questions, summaries, **unit / integration / end-to-end tests** and **comments** go to **Gemini Flash**, then **DeepSeek V4.1 Flash** if Gemini is unavailable or out of quota, then your main engine.
+- **Delegation** — simple questions, summaries, **unit / integration / end-to-end tests** and **comments** go to **Gemini Flash**, then **DeepSeek V4.1 Flash** if Gemini is unavailable or out of quota, then your main engine. Gemini through Antigravity is text only: it takes simple questions and summaries, while tests and comments (tool work) go to DeepSeek Flash under Omega's shell guard.
 - **Auto model (Claude)** — Jev rates each turn: simple edits → **Haiku**, everyday work → **Sonnet**, hard tasks → your model. Never above your choice, never at the expense of a warm cache.
 - **Continuous tests** — tests run in the background while the agent codes (`cargo watch`, `vitest`, `jest`, `ptw`, `gotestsum`, `dotnet watch test`, `gradle --continuous`, or Omega's own watcher).
 - **Savings proof** (⚙ Settings) — per-request input, cache read/write, output and Jev usage, plus a benchmark of Jev on 7 labelled prompts.

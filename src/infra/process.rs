@@ -94,7 +94,7 @@ fn direct(line: &str) -> Option<(PathBuf, Vec<String>)> {
     if POWERSHELL_NAMES.contains(&lower.as_str()) || (name.contains('-') && name.chars().next().is_some_and(char::is_uppercase)) {
         return None;
     }
-    let program = resolve(name)?;
+    let program = which(name)?;
     // A batch file re-parses its arguments through cmd.exe: quoted or spaced ones stay with the shell.
     let batch = program.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
     if batch && args.iter().any(|a| a.is_empty() || a.contains(char::is_whitespace) || a.contains('"')) {
@@ -136,7 +136,7 @@ fn split(line: &str) -> Option<Vec<String>> {
 }
 
 /// The executable PATH would run for `name` (`.exe`, `.com`, `.cmd`, `.bat`), as `CreateProcess` needs it.
-fn resolve(name: &str) -> Option<PathBuf> {
+pub fn which(name: &str) -> Option<PathBuf> {
     const EXTS: [&str; 4] = ["exe", "com", "cmd", "bat"];
     if name.is_empty() || name.contains(['/', '\\', ':']) {
         return None;

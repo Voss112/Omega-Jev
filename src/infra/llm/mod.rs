@@ -1,6 +1,7 @@
 //! System Two streaming client: one facade over three wire protocols
 //! (OpenAI-compatible, Anthropic Messages, Gemini Code Assist) with subscription tokens.
 
+pub mod agy;
 mod anthropic;
 mod gemini;
 mod openai;
@@ -101,6 +102,8 @@ pub struct Llm {
     auth: Option<std::sync::Arc<Auth>>,
     /// Claude deferred-tools mode still allowed (turned off for the session once the API refuses the beta).
     deferred: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Gemini subscription through the Antigravity CLI: the `agy` binary (text only).
+    agy: Option<std::path::PathBuf>,
 }
 
 impl Llm {
@@ -108,8 +111,10 @@ impl Llm {
     pub fn new(http: Client, settings: &Settings, engine: Engine) -> Self {
         let (base, key, model) = settings.endpoint(engine);
         let key = if key.trim().is_empty() { std::env::var(engine.key_var()).unwrap_or_default() } else { key.trim().to_owned() };
-        let auth =
-            Provider::of(engine).filter(|_| settings.auth_mode(engine) == AuthMode::Subscription).and_then(Auth::load);
+        let subscribed = settings.auth_mode(engine) == AuthMode::Subscription;
+        // Personal Google plans only reach Gemini through Antigravity now; Code Assist stays for Cloud projects.
+        let agy = (engine == Engine::Gemini && subscribed).then(agy::binary).flatten();
+        let auth = Provider::of(engine).filter(|_| subscribed && agy.is_none()).and_then(Auth::load);
         // Subscription endpoints are the providers' own: the API-key URL never carries a subscription token.
         let base = match (engine, auth.is_some()) {
             (Engine::Claude, true) => claude::API.to_owned(),
@@ -125,11 +130,20 @@ impl Llm {
             effort: settings.effort.get(engine),
             auth,
             deferred: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            agy,
         }
+    }
+
+    /// Can run Omega's tool loop (Antigravity answers in text only).
+    pub fn tools(&self) -> bool {
+        self.agy.is_none()
     }
 
     /// A Gemini API key speaks Google's OpenAI-compatible endpoint; only the subscription uses Code Assist.
     pub fn wire(&self) -> Wire {
+        if self.agy.is_some() {
+            return Wire::Antigravity;
+        }
         match self.engine.wire() {
             Wire::Gemini if self.auth.is_none() => Wire::OpenAi,
             wire => wire,
@@ -147,9 +161,11 @@ impl Llm {
         spent.get(&(self.engine, self.model.clone())).is_some_and(|at| at.elapsed() < COOLDOWN)
     }
 
-    /// Remembers a quota failure (other errors are transient and only fail over this once).
+    /// Remembers a quota failure or a refused account (other errors are transient and only fail over this once).
     pub fn note_failure(&self, error: &anyhow::Error) {
-        if exhausted(error) {
+        let text = format!("{error:#}");
+        let refused = [" 401", " 403", "#3501", "Code Assist", "non configuré"].iter().any(|m| text.contains(m));
+        if exhausted(error) || refused {
             spent()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -179,27 +195,30 @@ impl Llm {
     /// (a new thinking budget voids the cached messages).
     pub fn effort_keeps_cache(&self) -> bool {
         match self.wire() {
-            Wire::OpenAi | Wire::Gemini => true,
+            Wire::OpenAi | Wire::Gemini | Wire::Antigravity => true,
             Wire::Anthropic => anthropic::adaptive(&self.model),
         }
     }
 
     /// A key is set (or a subscription is connected) and will only travel over TLS.
     pub fn configured(&self) -> bool {
-        self.base.starts_with("https://") && (self.auth.is_some() || !self.key.is_empty())
+        self.agy.is_some() || (self.base.starts_with("https://") && (self.auth.is_some() || !self.key.is_empty()))
     }
 
     pub fn subscription(&self) -> bool {
-        self.auth.is_some()
+        self.auth.is_some() || self.agy.is_some()
     }
 
     pub fn account(&self) -> String {
+        if self.agy.is_some() {
+            return "Antigravity (agy)".to_owned();
+        }
         self.auth.as_ref().map(|a| a.account()).unwrap_or_default()
     }
 
     /// Ahead of a turn: TLS connection opened and a near-expiry subscription token refreshed off the critical path.
     pub async fn warm(&self) {
-        if !self.configured() {
+        if !self.configured() || self.agy.is_some() {
             return;
         }
         if self.auth.is_some() {
@@ -214,6 +233,8 @@ impl Llm {
             Wire::OpenAi => openai::body(&self.model, self.engine, self.effort, messages, tools),
             Wire::Anthropic => anthropic::body(messages, tools, &self.model, self.effort, self.auth.is_some()),
             Wire::Gemini => gemini::body(messages, tools, &self.model, &self.project(), self.effort),
+            // agy has no tool interface for Omega: only the conversation travels.
+            Wire::Antigravity => json!({ "model": self.model, "messages": messages }),
         }
     }
 
@@ -226,6 +247,7 @@ impl Llm {
     /// a 1-token completion on OpenAI-compatible engines (billed, negligible output).
     pub async fn count(&self, body: &Value) -> Result<u64> {
         match self.wire() {
+            Wire::Antigravity => bail!("Antigravity ne compte pas les tokens sans exécuter une requête"),
             Wire::Anthropic => {
                 anyhow::ensure!(self.base.starts_with("https://"), "URL {} non HTTPS refusée", self.engine.label());
                 let shape: serde_json::Map<String, Value> = ["model", "system", "messages", "tools", "thinking"]
@@ -265,6 +287,9 @@ impl Llm {
 
     /// Provider model list (`/models`, `/v1/models`), ids and display names.
     async fn listed(&self) -> Result<Vec<Choice>> {
+        if let Some(bin) = &self.agy {
+            return Ok(agy::models(bin).await?.into_iter().map(|m| Choice::new(m.clone(), m)).collect());
+        }
         anyhow::ensure!(self.base.starts_with("https://"), "URL {} non HTTPS refusée", self.engine.label());
         // Code Assist has no model list: the catalogue (and a free-form id) feeds the picker.
         if self.wire() == Wire::Gemini {
@@ -286,6 +311,12 @@ impl Llm {
 
     /// Credential valid and configured model actually reachable.
     pub async fn ping(&self) -> Result<()> {
+        // Antigravity: installed and signed in when it lists its models.
+        if let Some(bin) = &self.agy {
+            let models = agy::models(bin).await?;
+            anyhow::ensure!(!models.is_empty(), "agy ne liste aucun modèle — lancez `agy` une fois pour vous connecter");
+            return Ok(());
+        }
         // Code Assist: the account must have a tier and a project; the project found is kept for the requests.
         if self.wire() == Wire::Gemini {
             let auth = self.auth.as_ref().with_context(|| self.missing())?;
@@ -325,6 +356,10 @@ impl Llm {
     }
 
     pub async fn stream(&self, body: &Value, mut on: impl FnMut(Delta<'_>)) -> Result<Completion> {
+        if let Some(bin) = &self.agy {
+            let messages = body["messages"].as_array().cloned().unwrap_or_default();
+            return agy::run(bin, &self.model, self.effort, &messages, on).await?.finish(self.engine);
+        }
         let res = self.send(body).await?;
         let mut out = Completion::default();
         let mut buf: Vec<u8> = Vec::new();
@@ -353,6 +388,7 @@ impl Llm {
             Wire::OpenAi => openai::apply(out, data, on),
             Wire::Anthropic => anthropic::apply(out, data, on),
             Wire::Gemini => gemini::apply(out, data, on),
+            Wire::Antigravity => bail!("agy ne passe pas par HTTP"),
         }
     }
 
@@ -361,6 +397,7 @@ impl Llm {
             Wire::OpenAi => format!("{}/chat/completions", self.base),
             Wire::Anthropic => format!("{}/v1/messages", self.base),
             Wire::Gemini => format!("{}:streamGenerateContent?alt=sse", self.base),
+            Wire::Antigravity => String::new(),
         }
     }
 
@@ -390,6 +427,7 @@ impl Llm {
             req = match self.wire() {
                 Wire::OpenAi => req.bearer_auth(&token),
                 Wire::Gemini => req.bearer_auth(&token).header("user-agent", gemini_auth::USER_AGENT),
+                Wire::Antigravity => bail!("agy ne passe pas par HTTP"),
                 Wire::Anthropic => anthropic_headers(req, &token, self.auth.is_some(), anthropic::uses_deferred_tools(body)),
             };
             let res = req.send().await.with_context(|| format!("{} injoignable", self.engine.label()))?;
@@ -608,6 +646,39 @@ mod tests {
         assert_eq!(done.tool_calls.len(), 1, "un appel sans nom est écarté");
         assert!(done.tool_calls[0].id.starts_with("call_"), "un appel sans id en reçoit un");
         assert!(thinking_rejected(&anyhow::anyhow!("Claude 400: messages.5.content.0: Invalid `signature` in `thinking` block")));
+    }
+
+    /// Gemini with the saved subscription, main and Flash models: `cargo test -- --ignored gemini_live --nocapture`.
+    #[tokio::test]
+    #[ignore = "network + Gemini subscription"]
+    async fn gemini_live() {
+        let (settings, _) = crate::infra::store::load_settings();
+        let llm = Llm::new(crate::infra::http::client(&settings.proxy).unwrap(), &settings, Engine::Gemini);
+        println!("subscription={} wire={:?} configured={}", llm.subscription(), llm.wire(), llm.configured());
+        if let Some(auth) = &llm.auth {
+            println!("project stocké: {:?} compte: {:?}", auth.project(), auth.account());
+            let token = auth.fresh(&llm.http).await.unwrap();
+            let probe = json!({ "metadata": { "pluginType": "GEMINI", "ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED" } });
+            let res = llm
+                .http
+                .post(format!("{}:loadCodeAssist", gemini_auth::CODE_ASSIST))
+                .bearer_auth(&token)
+                .header("user-agent", gemini_auth::USER_AGENT)
+                .json(&probe)
+                .send()
+                .await
+                .unwrap();
+            println!("loadCodeAssist {}: {}", res.status(), res.text().await.unwrap_or_default());
+        }
+        println!("ping: {:?}", llm.ping().await.map_err(|e| format!("{e:#}")));
+        for model in [settings.gemini_flash_model.clone(), settings.gemini_model.clone()] {
+            let m = llm.with_model(&model).with_effort(Effort::Off);
+            let body = m.body(&[json!({ "role": "user", "content": "Reply with the single word: ok" })], None);
+            match m.stream(&body, |_| {}).await {
+                Ok(done) => println!("{model}: {:?} usage={:?}", done.content, done.usage),
+                Err(e) => println!("{model}: ERREUR {e:#}"),
+            }
+        }
     }
 
     /// Real streamed call through this client: `DEEPSEEK_API_KEY=… OMEGA_TEST_MODEL=… cargo test -- --ignored live_stream`.

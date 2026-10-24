@@ -125,6 +125,16 @@ fn ineligible(v: &Value) -> Option<String> {
     })
 }
 
+/// The individual tier refused to this client (Google moved personal accounts to Antigravity).
+fn unsupported(v: &Value) -> Option<String> {
+    v["ineligibleTiers"].as_array()?.iter().find(|t| t["reasonCode"].as_str() == Some("UNSUPPORTED_CLIENT")).map(|t| {
+        let google = t["reasonMessage"].as_str().unwrap_or_default();
+        format!(
+            "Google n'ouvre plus Gemini Code Assist aux comptes personnels (Google AI Pro/Ultra) : « {google} ». \n             Utilisez une clé API Gemini (aistudio.google.com) en mode « Clé API », ou un projet Google Cloud (GOOGLE_CLOUD_PROJECT)."
+        )
+    })
+}
+
 /// Google sometimes blocks Code Assist until the account is validated (age, region, Workspace policy).
 fn validation_url(v: &Value) -> Option<String> {
     v["ineligibleTiers"].as_array()?.iter().find_map(|tier| {
@@ -180,6 +190,10 @@ pub async fn tier(http: &Client, access: &str, project: &str) -> Result<(String,
         bail!("{message}");
     }
     let free = tier_id == "free-tier";
+    // Personal accounts (Google AI Pro/Ultra included) lost Code Assist: say so instead of asking for a project.
+    if !free && needs_project && project.is_empty() && let Some(reason) = unsupported(&v) {
+        bail!("{reason}");
+    }
     if !free && needs_project && project.is_empty() {
         bail!("Cette offre Gemini exige un projet Google Cloud : définissez GOOGLE_CLOUD_PROJECT, puis reconnectez-vous.");
     }
@@ -321,6 +335,17 @@ mod tests {
             assert!(url.contains(needle), "manque {needle}");
         }
         assert!(url.contains(&format!("state={}", p.state)));
+    }
+
+    #[test]
+    fn a_personal_account_refused_by_code_assist_is_explained() {
+        let v = json!({
+            "allowedTiers": [{ "id": "standard-tier", "isDefault": true, "userDefinedCloudaicompanionProject": true }],
+            "ineligibleTiers": [{ "reasonCode": "UNSUPPORTED_CLIENT", "reasonMessage": "migrate to Antigravity", "tierId": "free-tier" }]
+        });
+        let reason = unsupported(&v).unwrap();
+        assert!(reason.contains("migrate to Antigravity") && reason.contains("Clé API"));
+        assert!(unsupported(&json!({})).is_none());
     }
 
     #[test]

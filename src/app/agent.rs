@@ -109,10 +109,17 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
 
     let reads = Reads::from_history(&conv.messages[visible..]);
     let images = conv.messages.last().is_some_and(|m| !m.images.is_empty());
+    // Gemini via Antigravity answers in text only: a turn that needs tools must run on another engine.
+    ensure!(
+        env.llm.tools() || route.tools().is_empty(),
+        "Gemini (Antigravity) répond en texte seul : choisissez Claude ou DeepSeek pour un travail qui lit ou modifie des fichiers."
+    );
     let mut turn = Turn { emit, turn, system: &system, reads: &reads, live: &mut live };
     if delegated(&route, &env.settings) {
         // Gemini Flash first, DeepSeek Flash next; one out of quota (or down) before answering hands over.
-        for helper in env.helpers.iter().filter(|h| !h.cooling() && (!images || h.engine.vision())) {
+        // A text-only helper (Gemini via Antigravity) takes simple questions, never tool work.
+        let usable = |h: &&Llm| !h.cooling() && (!images || (h.engine.vision() && h.tools())) && (h.tools() || route.delegable());
+        for helper in env.helpers.iter().filter(usable) {
             let before = conv.messages.len();
             let tuned = routed_effort(helper, &env.settings, &route).unwrap_or_else(|| helper.clone());
             match steps(conv, &env.with_llm(tuned), &mut turn, env.settings.step_limit()).await {
@@ -354,7 +361,13 @@ async fn run_tools(conv: &mut Conversation, ctx: &ToolCtx<'_>, calls: &[ToolCall
     if !changed.is_empty() {
         live.edited();
     }
-    if ctx.env.settings.auto_diagnostics
+    // A build manifest or build script changed after web content: compiling would run it unasked.
+    let unsafe_build = !ctx.env.settings.bypass && ctx.reads.untrusted() && changed.iter().any(|p| diagnostics::builds(p));
+    if unsafe_build {
+        output.text.push_str("
+
+[diagnostics] non lancés : script de build ou manifeste modifié après lecture de contenu web — l'utilisateur doit valider la compilation.");
+    } else if ctx.env.settings.auto_diagnostics
         && !changed.is_empty()
         && let Some(report) = diagnostics::check(&ctx.root, &changed).await
     {

@@ -10,6 +10,7 @@ pub mod dictation;
 #[cfg(test)]
 mod e2e;
 pub mod health;
+pub mod inbox;
 pub mod login;
 pub mod prompts;
 pub mod router;
@@ -30,7 +31,7 @@ use crate::{
     domain::{
         auth::{Cred, Provider, Window},
         chat::{Message, Summary, Usage},
-        engine::Engine,
+        engine::{Effort, Engine},
         models::Choice,
         route::Route,
         savings::Sample,
@@ -51,6 +52,8 @@ pub struct Env {
     pub helpers: Vec<Llm>,
     pub jev: Option<Jev>,
     pub web: Arc<WebIndex>,
+    /// Messages forced into running turns; shared across rebuilt environments.
+    pub inbox: inbox::Inbox,
 }
 
 impl Env {
@@ -64,7 +67,7 @@ impl Env {
             settings.jev_key.trim().to_owned()
         };
         let jev = Jev::new(http.clone(), &settings.jev_url, &jev_key, &settings.jev_model);
-        Ok(Self { settings, http, llm, helpers, jev, web })
+        Ok(Self { settings, http, llm, helpers, jev, web, inbox: inbox::Inbox::default() })
     }
 
     /// Same environment, another engine (a delegated turn, or the effort Jev picked).
@@ -76,6 +79,7 @@ impl Env {
             helpers: Vec::new(),
             jev: self.jev.clone(),
             web: self.web.clone(),
+            inbox: self.inbox.clone(),
         }
     }
 
@@ -139,6 +143,15 @@ pub enum Event {
         text: String,
         reasoning: bool,
     },
+    /// The engine, exact model and effort now working on the turn (auto tier, delegation, Jev effort).
+    Running {
+        conv: Uuid,
+        engine: Engine,
+        model: String,
+        effort: Effort,
+    },
+    /// A newer release was downloaded and verified; installed silently on exit.
+    UpdateReady(std::path::PathBuf),
     Message {
         conv: Uuid,
         msg: Message,

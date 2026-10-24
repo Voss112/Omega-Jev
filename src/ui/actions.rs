@@ -68,21 +68,41 @@ impl App {
         if self.slash_command(&text) {
             return;
         }
-        if (text.is_empty() && self.shots.is_empty()) || self.busy() {
+        if text.is_empty() && self.shots.is_empty() && self.docs.is_empty() {
             return;
         }
-        if self.settings.require_vpn && !self.vpn.as_ref().is_some_and(|v| v.active) {
-            self.notify("Kill-switch VPN : aucun VPN détecté, envoi bloqué.");
+        let busy = self.busy();
+        if !busy && self.vpn_blocks() {
             return;
         }
+        if busy {
+            self.enqueue(text);
+            return;
+        }
+        let text = super::docs::inline(&text, &std::mem::take(&mut self.docs));
         let images = std::mem::take(&mut self.shots);
+        self.draft.clear();
+        self.submit(None, text, images);
+    }
+
+    /// Kill-switch: `true` (and a notice) when sending must wait for a VPN.
+    pub(super) fn vpn_blocks(&mut self) -> bool {
+        let blocked = self.settings.require_vpn && !self.vpn.as_ref().is_some_and(|v| v.active);
+        if blocked {
+            self.notify("Kill-switch VPN : aucun VPN détecté, envoi bloqué.");
+        }
+        blocked
+    }
+
+    /// Starts a turn in `target` (the current conversation when `None`, a new one if none) with this user message.
+    pub(super) fn submit(&mut self, target: Option<Uuid>, text: String, images: Vec<crate::domain::chat::Image>) {
         if !images.is_empty() && !self.settings.engine.vision() {
             self.notify(format!(
                 "{} ne lit pas les images : elles restent locales (utilisez Claude pour les montrer).",
                 self.settings.engine.label()
             ));
         }
-        let id = if let Some(id) = self.current {
+        let id = if let Some(id) = target.or(self.current) {
             id
         } else {
             let conv = Conversation::default();
@@ -100,7 +120,6 @@ impl App {
         let Some(conv) = self.conv_mut(id) else { return };
         conv.repair();
         conv.push(if images.is_empty() { Message::user(text) } else { Message::user_with(text, images) });
-        self.draft.clear();
         self.launch(id);
     }
 
@@ -236,7 +255,7 @@ impl App {
         if let Err(e) = store::save_settings(&settings) {
             self.notify(format!("Paramètres non enregistrés : {e:#}"));
         }
-        let (env, notice) = build_env(&settings, &self.web);
+        let (env, notice) = build_env(&settings, &self.web, &self.env.inbox);
         // Engine, effort or bypass switches do not re-run the network self-tests (token refreshes, paid probes).
         let probes = probed(&self.settings) != probed(&settings);
         let vpn = (&self.settings.proxy, self.settings.ip_lookup) != (&settings.proxy, settings.ip_lookup);
@@ -244,8 +263,18 @@ impl App {
         if !settings.live_tests || settings.workspace != self.settings.workspace {
             crate::tools::livetest::stop_all();
         }
+        let updates = !self.settings.auto_update && settings.auto_update;
+        if settings.autostart != self.settings.autostart
+            && let Err(e) = crate::infra::autostart::apply(settings.autostart)
+        {
+            self.notify(format!("Démarrage avec Windows : {e:#}"));
+        }
         self.settings = settings;
         self.env = env;
+        self.tray_sync = true;
+        if updates {
+            self.start_updates();
+        }
         if let Some(n) = notice {
             self.notify(n);
         }
@@ -663,7 +692,7 @@ impl App {
         settings.effort.set(job.engine, job.effort);
         // A scheduled run never waits for a human: bypass is part of the contract.
         settings.bypass = true;
-        let (env, _) = build_env(&settings, &self.web);
+        let (env, _) = build_env(&settings, &self.web, &self.env.inbox);
         let mut conv = Conversation::default();
         let id = conv.id;
         conv.push(Message::user(job.prompt.clone()));

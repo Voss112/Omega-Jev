@@ -267,6 +267,8 @@ impl LiveTurn {
 async fn steps(conv: &mut Conversation, env: &Env, turn: &mut Turn<'_>, limit: Option<u32>) -> Result<Finish> {
     let ctx = ToolCtx { env, root: env.workspace(), emit: turn.emit, conv: conv.id, turn: turn.turn, reads: turn.reads };
     let mut step = 0;
+    let (engine, model, effort) = (env.llm.engine, env.llm.model.clone(), env.llm.effort);
+    turn.emit.send(Event::Running { conv: conv.id, engine, model, effort });
     loop {
         if limit.is_some_and(|l| step >= l.max(1)) {
             return Ok(Finish::Budget);
@@ -375,6 +377,10 @@ async fn run_tools(conv: &mut Conversation, ctx: &ToolCtx<'_>, calls: &[ToolCall
         output.text.push_str(&report);
     }
     if let Some(note) = live.note() {
+        output.text.push_str("\n\n");
+        output.text.push_str(&note);
+    }
+    if let Some(note) = ctx.env.inbox.note(conv.id) {
         output.text.push_str("\n\n");
         output.text.push_str(&note);
     }

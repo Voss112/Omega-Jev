@@ -28,6 +28,11 @@ pub fn models() -> PathBuf {
     root().join("models")
 }
 
+/// Downloaded update installers, applied on exit.
+pub fn updates() -> PathBuf {
+    root().join("updates")
+}
+
 /// Default sandbox when the user has not picked a project folder; kept apart from the data dir (API keys).
 pub fn workspace() -> PathBuf {
     dirs::document_dir().map_or_else(|| root().join("workspace"), |d| d.join("Omega"))

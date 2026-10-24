@@ -119,6 +119,12 @@ pub struct Settings {
     /// The connected GitHub account authenticates `git` and `gh` in the agent's shell.
     pub github_shell: bool,
     pub workspace: Option<PathBuf>,
+    /// Releases of the GitHub repository installed silently (downloaded in background, applied on exit).
+    pub auto_update: bool,
+    /// Icon in the notification area; closing the window hides it there.
+    pub tray: bool,
+    /// Start with Windows (per-user Run key).
+    pub autostart: bool,
 }
 
 impl Default for Settings {
@@ -162,6 +168,9 @@ impl Default for Settings {
             ip_lookup: false,
             github_shell: true,
             workspace: None,
+            auto_update: true,
+            tray: true,
+            autostart: false,
         }
     }
 }

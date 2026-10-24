@@ -311,6 +311,12 @@ fn form(
         switch(ui, "Kill-switch VPN", &mut s.require_vpn, "Bloquer l'envoi si aucun VPN n'est détecté");
         switch(ui, "IP publique", &mut s.ip_lookup, "Vérifier l'IP de sortie (ipwho.is)");
     });
+    widgets::form_section(ui, Icon::Gear, "Système");
+    card_grid(ui, "system", |ui| {
+        switch(ui, "Mises à jour", &mut s.auto_update, "Télécharger chaque release GitHub en silence, installée à la fermeture");
+        switch(ui, "Zone de notification", &mut s.tray, "Icône près de l'horloge ; fermer la fenêtre l'y range");
+        switch(ui, "Démarrage", &mut s.autostart, "Lancer Omega à l'ouverture de la session Windows");
+    });
     widgets::form_section(ui, Icon::Folder, "Dossier de travail");
     widgets::card(ui, EDGE, |ui| {
         ui.set_width(ui.available_width());

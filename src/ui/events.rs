@@ -26,6 +26,17 @@ impl App {
                         if reasoning { l.reasoning.push_str(&text) } else { l.text.push_str(&text) }
                     }
                 }
+                Event::Running { conv, engine, model, effort } => {
+                    if let Some(l) = self.live.get_mut(&conv) {
+                        l.engine = engine;
+                        l.model = model;
+                        l.effort = Some(effort);
+                    }
+                }
+                Event::UpdateReady(path) => {
+                    self.notify("Mise à jour téléchargée : installée à la fermeture d'Omega");
+                    self.update = Some(path);
+                }
                 Event::Message { conv, msg } => {
                     // Late events from a stopped turn are dropped: the partial answer was already kept.
                     let Some(l) = self.live.get_mut(&conv) else { continue };
@@ -76,12 +87,14 @@ impl App {
                     if self.live.remove(&conv).is_none() {
                         continue;
                     }
+                    let failed = error.is_some();
                     if let Some(e) = error {
                         self.errors.insert(conv, e);
                     }
                     self.save(conv);
                     // The turn may have written files: the tree must re-read the disk.
                     self.files.invalidate();
+                    self.turn_ended(conv, failed);
                 }
                 Event::Health(h) => self.health = h,
                 Event::Bench(rows) => {

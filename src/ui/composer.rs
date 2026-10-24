@@ -1,4 +1,4 @@
-//! Prompt box: Enter sends, Shift+Enter new line, engine/model/effort pickers, send/stop.
+//! Prompt box: Enter sends (queues while a turn runs), Shift+Enter new line, pickers or live model, send/stop.
 
 use eframe::egui::{
     Align, Align2, Color32, FontId, Frame, Id, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Sense, Shape, Stroke, StrokeKind,
@@ -8,8 +8,11 @@ use eframe::egui::{
 use super::{
     App, attach,
     chat::column,
-    dictation, fx,
+    dictation,
+    extras::{doc_chips, live_pills},
+    fx,
     icons::{self, Icon},
+    queue,
     theme::{self, ACCENT, ACCENT_HI, AMBER, CYAN, FAINT, INDIGO, MUTED, RED, SOFT, TEXT},
     widgets,
 };
@@ -27,8 +30,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let id = Id::unique("composer");
     let focused = ui.memory(|m| m.has_focus(id));
     let busy = app.busy();
-    let mut send = focused && !busy && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+    let mut send = focused && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
     let mut stop = false;
+    let mut force = false;
     let mut cancel_edit = false;
     let mut schedule = false;
     let mut pick = false;
@@ -36,7 +40,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let t = fx::now(&ctx);
     app.collect_images(&ctx);
+    app.collect_docs(&ctx);
     column(ui, |ui| {
+        queue::strip(app, ui);
         if app.editing.is_some() {
             cancel_edit = editing_banner(ui);
             ui.add_space(6.0);
@@ -60,6 +66,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 }
                 ui.add_space(6.0);
             }
+            doc_chips(app, ui);
             ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
                 let edit = TextEdit::multiline(&mut app.draft)
                     .id(id)
@@ -83,14 +90,23 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     |ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                         let compact = ui.available_width() < 760.0;
-                        if widgets::icon_button(ui, Icon::Image, "Joindre une image — glisser-déposer et Ctrl+V marchent aussi")
+                        if widgets::icon_button(ui, Icon::Plus, "Importer des fichiers (images, code, texte) — glisser-déposer et Ctrl+V marchent aussi")
                             .clicked()
                         {
                             pick = true;
                         }
                         dictate = dictation::button(app, ui, t);
-                        engine_picker(app, ui);
+                        if busy {
+                            live_pills(app, ui);
+                        } else {
+                            engine_picker(app, ui);
+                        }
                         bypass_toggle(app, ui, t);
+                        if busy {
+                            let ready = !app.draft.trim().is_empty() || !app.docs.is_empty();
+                            let tip = "Envoyer maintenant : l'agent lit ce message pendant qu'il travaille (Entrée = file d'attente)";
+                            force = ready && widgets::pill(ui, Some(Icon::Bolt), "Forcer", if ready { AMBER } else { FAINT }, false).on_hover_text(tip).clicked();
+                        }
                         if widgets::pill(ui, Some(Icon::Clock), if compact { "" } else { "Programmer" }, MUTED, false)
                             .on_hover_text("Envoyer ce prompt plus tard, avec le moteur et l'effort choisis (toujours en bypass)")
                             .clicked()
@@ -103,7 +119,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 .rect;
             let right = ui.max_rect().right();
             let button = Rect::from_center_size(pos2(right - SEND / 2.0, toolbar.bottom() - 15.0), vec2(SEND, SEND));
-            let clicked = action_button(ui, button, busy, !app.draft.trim().is_empty() || !app.shots.is_empty(), t);
+            let clicked = action_button(ui, button, busy, !app.draft.trim().is_empty() || !app.shots.is_empty() || !app.docs.is_empty(), t);
             send |= clicked && !busy;
             stop |= clicked && busy;
             if app.model_input.is_some() {
@@ -128,7 +144,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         }
         if ui.ctx().input(|i| !i.raw.hovered_files.is_empty()) {
             shapes.push(Shape::rect_stroke(rect, RADIUS, Stroke::new(2.0, CYAN), StrokeKind::Inside));
-            p.text(rect.center(), Align2::CENTER_CENTER, "Déposez l'image ici", FontId::proportional(14.0), CYAN);
+            p.text(rect.center(), Align2::CENTER_CENTER, "Déposez vos fichiers ici", FontId::proportional(14.0), CYAN);
         }
         p.set(bg, Shape::Vec(shapes));
         ui.add_space(8.0);
@@ -138,13 +154,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         app.cancel_edit();
     }
     if pick {
-        let picked = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "gif", "bmp"]).pick_files();
-        for path in picked.unwrap_or_default() {
-            match attach::from_path(&path) {
-                Ok(img) => app.attach(img),
-                Err(e) => app.notify(e),
-            }
-        }
+        app.import_files(rfd::FileDialog::new().pick_files().unwrap_or_default());
+    }
+    if force {
+        app.force_draft();
     }
     if schedule {
         app.open_schedule();

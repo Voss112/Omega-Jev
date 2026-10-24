@@ -123,7 +123,7 @@ pub fn dropped(ctx: &Context) -> Vec<Result<Vec<u8>, String>> {
     })
 }
 
-fn is_image(path: &Path) -> bool {
+pub fn is_image(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| matches!(e.to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"))

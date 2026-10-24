@@ -6,7 +6,9 @@ mod cards;
 mod chat;
 mod composer;
 mod dictation;
+mod docs;
 mod events;
+mod extras;
 mod files;
 mod highlight;
 mod fx;
@@ -16,6 +18,7 @@ mod markdown;
 mod panel;
 mod pace;
 mod plans;
+mod queue;
 mod savings;
 mod scale;
 mod schedule;
@@ -23,6 +26,8 @@ mod settings;
 mod sidebar;
 mod tasks;
 mod theme;
+mod tray;
+mod update;
 mod widgets;
 mod window;
 
@@ -38,7 +43,7 @@ use tokio::{runtime::Runtime, task::JoinHandle};
 use uuid::Uuid;
 
 use crate::{
-    app::{Approval, Emitter, Env, Event, health},
+    app::{inbox::Inbox,Approval, Emitter, Env, Event, health},
     domain::{
         auth::{Provider, Window},
         chat::Conversation,
@@ -79,6 +84,8 @@ struct Live {
     /// Engine and model of this run (a scheduled job runs with its own), stamped on a stopped answer.
     engine: Engine,
     model: String,
+    /// Effort the running step uses (Jev may lower it), known once the first step starts.
+    effort: Option<crate::domain::engine::Effort>,
 }
 
 pub struct App {
@@ -153,6 +160,16 @@ pub struct App {
     model_input: Option<String>,
     /// Voice dictation in progress.
     voice: Option<dictation::Voice>,
+    /// Prompts typed while a turn runs, sent one by one when it ends.
+    queue: HashMap<Uuid, std::collections::VecDeque<queue::Queued>>,
+    /// Text files joined to the draft, inlined at send.
+    docs: Vec<docs::Doc>,
+    /// System tray icon (absent when disabled or unavailable).
+    tray: Option<tray::Tray>,
+    /// Settings changed: the tray icon is re-synced on the next frame (needs the egui context).
+    tray_sync: bool,
+    /// Update downloaded in the background, installed silently on exit.
+    update: Option<std::path::PathBuf>,
 }
 
 impl App {
@@ -164,7 +181,7 @@ impl App {
         let emit = Emitter::new(tx, Arc::new(move || wake_ctx.request_repaint()));
         let web = Arc::new(WebIndex::open(&paths::web_cache()));
         let (settings, unreadable) = store::load_settings();
-        let (env, notice) = build_env(&settings, &web);
+        let (env, notice) = build_env(&settings, &web, &Inbox::default());
         let convs = store::load_conversations();
         let mut app = Self {
             rt: Some(Runtime::new().expect("tokio runtime")),
@@ -215,6 +232,11 @@ impl App {
             catalog_error: HashMap::new(),
             model_input: None,
             voice: None,
+            queue: HashMap::new(),
+            docs: Vec::new(),
+            tray: None,
+            tray_sync: false,
+            update: None,
         };
         if let Some(n) = unreadable.or(notice) {
             app.notify(n);
@@ -240,6 +262,11 @@ impl App {
         let engine = app.settings.engine;
         app.refresh_models(engine);
         app.spawn(async { tokio::task::spawn_blocking(|| checkpoint::prune(CHECKPOINT_MAX_AGE)).await });
+        app.apply_system(ctx);
+        app.start_updates();
+        if tray::background_launch() && app.tray.is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
         app
     }
 
@@ -316,27 +343,34 @@ impl Drop for App {
     fn drop(&mut self) {
         // Test watchers live outside the runtime: their process trees are killed before Omega exits.
         crate::tools::livetest::stop_all();
+        self.apply_update();
         if let Some(rt) = self.rt.take() {
             rt.shutdown_background();
         }
     }
 }
 
-fn build_env(settings: &Settings, web: &Arc<WebIndex>) -> (Arc<Env>, Option<String>) {
-    match Env::new(settings.clone(), web.clone()) {
-        Ok(env) => (Arc::new(env), None),
+fn build_env(settings: &Settings, web: &Arc<WebIndex>, inbox: &Inbox) -> (Arc<Env>, Option<String>) {
+    let (mut env, notice) = match Env::new(settings.clone(), web.clone()) {
+        Ok(env) => (env, None),
         Err(e) => {
             let fallback = Settings { proxy: String::new(), ..settings.clone() };
             let env = Env::new(fallback, web.clone()).expect("client HTTP sans proxy");
-            (Arc::new(env), Some(format!("Proxy ignoré : {e:#}")))
+            (env, Some(format!("Proxy ignoré : {e:#}")))
         }
-    }
+    };
+    env.inbox = inbox.clone();
+    (Arc::new(env), notice)
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.pump();
         let ctx = ui.ctx().clone();
+        self.pump_tray(&ctx);
+        if std::mem::take(&mut self.tray_sync) {
+            self.sync_tray(&ctx);
+        }
         self.scaler.update(&ctx);
         let narrow = ctx.content_rect().width() < scale::NARROW_W;
         self.pump_dictation(&ctx);

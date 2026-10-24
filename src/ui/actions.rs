@@ -28,6 +28,8 @@ fn probed(s: &Settings) -> Settings {
         bypass: false,
         confirm_edits: false,
         auto_diagnostics: false,
+        auto_effort: false,
+        delegate: false,
         compact_at: 0,
         require_vpn: false,
         ip_lookup: false,
@@ -420,7 +422,12 @@ impl App {
                     jev.warm().await;
                 }
             };
-            tokio::join!(env.llm.warm(), jev);
+            let helper = async {
+                if let Some(helper) = &env.helper {
+                    helper.warm().await;
+                }
+            };
+            tokio::join!(env.llm.warm(), jev, helper);
         });
     }
 

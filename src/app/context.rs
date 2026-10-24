@@ -184,6 +184,8 @@ mod tests {
             blast: 0.0,
             apps: 0.0,
             playbook: Some("security-audit".into()),
+            effort: None,
+            simple: 0.0,
         }
     }
 

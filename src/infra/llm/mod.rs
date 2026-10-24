@@ -145,6 +145,12 @@ impl Llm {
         self.deferred.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Changing the effort between requests keeps the prompt cache: DeepSeek, and Claude's adaptive thinking
+    /// (a new thinking budget voids the cached messages).
+    pub fn effort_keeps_cache(&self) -> bool {
+        self.wire() == Wire::OpenAi || anthropic::adaptive(&self.model)
+    }
+
     /// A key is set (or a subscription is connected) and will only travel over TLS.
     pub fn configured(&self) -> bool {
         self.base.starts_with("https://") && (self.auth.is_some() || !self.key.is_empty())

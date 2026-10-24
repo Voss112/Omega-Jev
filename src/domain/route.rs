@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::{skill::Skill, tool::ToolKind};
+use super::{engine::Effort, skill::Skill, tool::ToolKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Source {
@@ -26,6 +26,12 @@ pub struct Route {
     /// Superpowers playbook id injected this turn.
     #[serde(default)]
     pub playbook: Option<String>,
+    /// Reasoning depth the request needs, 0 (trivial) → 1 (deep); `None` = not estimated.
+    #[serde(default)]
+    pub effort: Option<f32>,
+    /// Plain chat or factual question that needs no tools, files or deep reasoning.
+    #[serde(default)]
+    pub simple: f32,
 }
 
 impl Route {
@@ -65,5 +71,69 @@ impl Route {
             }
         }
         set
+    }
+
+    /// Effort for this turn: Jev's estimate, never above what the user chose (`None` = the user's choice).
+    pub fn effort_cap(&self, chosen: Effort) -> Effort {
+        let Some(score) = self.effort else { return chosen };
+        let estimated = match score {
+            s if s < 0.25 => Effort::Low,
+            s if s < 0.5 => Effort::Medium,
+            s if s < 0.75 => Effort::High,
+            _ => Effort::Max,
+        };
+        estimated.min(chosen)
+    }
+
+    /// A simple, tool-free, methodology-free turn: a cheaper engine answers it as well.
+    pub fn delegable(&self) -> bool {
+        self.simple >= 0.8 && self.tools().is_empty() && self.playbook.is_none() && !self.risky() && !self.needs_apps()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chat() -> Route {
+        Route {
+            skill: Skill::Chat,
+            source: Source::Jev,
+            confidence: 0.9,
+            web: 0.0,
+            code: 0.0,
+            risk: 0.0,
+            blast: 0.0,
+            apps: 0.0,
+            playbook: None,
+            effort: None,
+            simple: 0.0,
+        }
+    }
+
+    #[test]
+    fn effort_cap_never_raises_the_users_choice() {
+        let r = |e: f32| Route { effort: Some(e), ..chat() };
+        assert_eq!(r(0.1).effort_cap(Effort::High), Effort::Low);
+        assert_eq!(r(0.9).effort_cap(Effort::Medium), Effort::Medium);
+        assert_eq!(r(0.6).effort_cap(Effort::Max), Effort::High);
+        assert_eq!(r(0.1).effort_cap(Effort::Off), Effort::Off);
+        assert_eq!(chat().effort_cap(Effort::High), Effort::High);
+    }
+
+    #[test]
+    fn delegable_requires_a_simple_toolless_turn() {
+        let simple = Route { simple: 0.9, ..chat() };
+        assert!(simple.delegable());
+        assert!(!Route { code: 0.6, ..simple.clone() }.delegable());
+        assert!(!Route { playbook: Some("brainstorming".into()), ..simple.clone() }.delegable());
+        assert!(!Route { simple: 0.7, ..simple }.delegable());
+    }
+
+    #[test]
+    fn old_routes_without_effort_still_load() {
+        let old = r#"{"skill":"chat","source":"Jev","confidence":0.8,"web":0,"code":0,"risk":0,"blast":0}"#;
+        let r: Route = serde_json::from_str(old).unwrap();
+        assert_eq!((r.effort, r.simple), (None, 0.0));
     }
 }

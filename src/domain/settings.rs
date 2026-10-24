@@ -64,8 +64,12 @@ pub struct Settings {
     pub claude_url: String,
     pub claude_model: String,
     pub claude_auth: AuthMode,
-    /// Effort chosen per engine (never by the router).
+    /// Effort chosen per engine: the ceiling Jev's estimate may lower (never raise).
     pub effort: Efforts,
+    /// Jev lowers the effort of easy turns (below the user's choice, when it keeps the cache).
+    pub auto_effort: bool,
+    /// Simple questions and conversation summaries go to DeepSeek Flash instead of the main engine.
+    pub delegate: bool,
     pub style: Style,
     pub max_steps: u32,
     pub auto_approve: bool,
@@ -98,6 +102,8 @@ impl Default for Settings {
             claude_model: "claude-sonnet-4-5".into(),
             claude_auth: AuthMode::Subscription,
             effort: Efforts::default(),
+            auto_effort: true,
+            delegate: true,
             style: Style::default(),
             max_steps: 64,
             auto_approve: true,

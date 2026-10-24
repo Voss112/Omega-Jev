@@ -293,6 +293,10 @@ pub fn inline_tools(model: &str) -> bool {
     matches!(thinking(model), Thinking::Adaptive { always_on: true, .. })
 }
 
+pub fn adaptive(model: &str) -> bool {
+    matches!(thinking(model), Thinking::Adaptive { .. })
+}
+
 /// The request withholds some tools, so it needs the tool-changes beta.
 pub fn uses_deferred_tools(body: &Value) -> bool {
     body["tools"].as_array().is_some_and(|t| t.iter().any(|x| x["defer_loading"] == true))

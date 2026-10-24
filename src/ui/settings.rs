@@ -233,6 +233,8 @@ fn form(ui: &mut Ui, s: &mut Settings, token: &mut String, accounts: &HashMap<Pr
         switch(ui, "Bypass", &mut s.bypass, "Tout accepter sans demander (commandes destructrices toujours bloquées)");
         switch(ui, "Modifications", &mut s.confirm_edits, "Valider chaque modification de fichier (diff affiché)");
         switch(ui, "Diagnostics", &mut s.auto_diagnostics, "Vérifier le code après modification (cargo check, tsc, go vet…)");
+        switch(ui, "Effort auto", &mut s.auto_effort, "Effort ajusté par Jev (plafond = votre choix)");
+        switch(ui, "Délégation", &mut s.delegate, "Déléguer à DeepSeek Flash : questions simples et résumés");
         ui.label(label("Compaction"));
         let mut k = s.compact_at / 1000;
         ui.add(DragValue::new(&mut k).range(20..=900).suffix(" k tokens"))

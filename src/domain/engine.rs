@@ -7,8 +7,8 @@ pub enum Wire {
     Anthropic,
 }
 
-/// Reasoning budget. `Off` sends no reasoning parameter at all.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Reasoning budget. `Off` sends no reasoning parameter at all. Ordered from least to most reasoning.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Effort {
     Off,

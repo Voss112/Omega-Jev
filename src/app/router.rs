@@ -112,6 +112,17 @@ pub(super) async fn ask_jev(jev: &Jev, input: &Input) -> Result<(Route, u64)> {
                 .collect(),
             ),
         ),
+        (
+            "effort".to_owned(),
+            Question::Score {
+                instructions: "How much reasoning does answering this request well take?".into(),
+                levels: ["trivial", "light", "standard", "deep"].map(String::from).to_vec(),
+            },
+        ),
+        (
+            "simple".to_owned(),
+            Question::noul("Simple chat or factual question answerable without tools, files or deep reasoning?"),
+        ),
     ];
     let a = jev.ask(state, &questions).await?;
     let (skill, confidence) = a.choice("skill").and_then(|(id, c)| Some((Skill::parse(&id)?, c))).context("skill")?;
@@ -125,6 +136,8 @@ pub(super) async fn ask_jev(jev: &Jev, input: &Input) -> Result<(Route, u64)> {
         blast: a.noul("blast").unwrap_or(0.0),
         apps: a.noul("apps").unwrap_or(0.0),
         playbook: a.choice("playbook").map(|(id, _)| id).filter(|id| Playbook::find(id).is_some()),
+        effort: a.score("effort"),
+        simple: a.noul("simple").unwrap_or(0.0),
     };
     Ok((route, a.tokens))
 }
@@ -221,6 +234,8 @@ pub fn local(query: &str) -> Route {
         blast: flag(skill == Skill::Refactor),
         apps: flag(APP_WORDS.iter().any(|w| q.contains(w))),
         playbook: skill.default_playbook().map(str::to_owned),
+        effort: None,
+        simple: 0.0,
     }
 }
 

@@ -32,10 +32,11 @@ pub async fn maybe(conv: &mut Conversation, env: &Env, emit: &Emitter) -> Result
     }
     let messages =
         vec![json!({ "role": "system", "content": PROMPT }), json!({ "role": "user", "content": transcript(conv, from, upto) })];
-    let body = env.llm.body(&messages, None);
-    let done = env.llm.stream(&body, |_| {}).await?;
+    let llm = env.summarizer();
+    let body = llm.body(&messages, None);
+    let done = llm.stream(&body, |_| {}).await?;
     emit.send(Event::Usage { conv: conv.id, usage: done.usage });
-    let sample = savings::plain(env, &body, &done.usage);
+    let sample = savings::plain(llm, &body, &done.usage);
     conv.savings.record(&sample);
     emit.send(Event::Measured { conv: conv.id, sample, thinking_from: conv.thinking_from });
     // An empty summary would silently erase the history: keep the full transcript instead.

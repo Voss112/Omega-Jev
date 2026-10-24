@@ -10,6 +10,8 @@ use super::{Emitter, Env, Event, compact, context, prompts, router, savings};
 use crate::{
     domain::{
         chat::{Conversation, Message, ToolCall, Usage},
+        route::Route,
+        settings::Settings,
         tool::ToolKind,
     },
     infra::llm::{self, Delta},
@@ -72,22 +74,62 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
     }
 
     let reads = Reads::from_history(&conv.messages[visible..]);
-    let ctx = ToolCtx { env, root, emit, conv: conv.id, turn, reads: &reads };
+    let images = conv.messages.last().is_some_and(|m| !m.images.is_empty());
+    if let Some(helper) = env.helper.as_ref().filter(|_| pick(&route, &env.settings, true, images) == Pick::Helper) {
+        let before = conv.messages.len();
+        match steps(conv, &env.with_llm(helper.clone()), emit, turn, &system, &reads).await {
+            // The helper failed before answering anything: the main engine takes the turn over.
+            Err(_) if conv.messages.len() == before => {}
+            done => return done,
+        }
+    }
+    let tuned = tuned(env, &route);
+    steps(conv, tuned.as_ref().unwrap_or(env), emit, turn, &system, &reads).await
+}
+
+/// Who answers this turn.
+#[derive(Debug, PartialEq, Eq)]
+enum Pick {
+    Main,
+    Helper,
+}
+
+/// A simple text turn goes to the helper when delegation is on; images only reach the main (vision) engine.
+fn pick(route: &Route, settings: &Settings, helper: bool, images: bool) -> Pick {
+    if settings.delegate && helper && !images && route.delegable() { Pick::Helper } else { Pick::Main }
+}
+
+/// The main engine at Jev's effort, when it is lower than the user's and changing it keeps the cache.
+fn tuned(env: &Env, route: &Route) -> Option<Env> {
+    if !env.settings.auto_effort || !env.llm.effort_keeps_cache() {
+        return None;
+    }
+    let effort = route.effort_cap(env.llm.effort);
+    (effort != env.llm.effort).then(|| {
+        let mut llm = env.llm.clone();
+        llm.effort = effort;
+        env.with_llm(llm)
+    })
+}
+
+/// The tool loop: stream, run the calls, repeat until an answer without calls.
+async fn steps(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64, system: &str, reads: &Reads) -> Result<()> {
+    let ctx = ToolCtx { env, root: env.workspace(), emit, conv: conv.id, turn, reads };
     for _ in 0..env.settings.max_steps.max(1) {
-        let body = context::request(conv, env, &system, true);
+        let body = context::request(conv, env, system, true);
         let done = match complete(env, emit, conv.id, &body).await {
             // Mid-conversation tool changes refused (model, account or beta): classic tools for the rest of the session.
             Err(e) if llm::uses_deferred_tools(&body) && llm::tools_beta_rejected(&e) => {
                 env.llm.disable_deferred();
-                conv.prefix = wire_prefix(env, &system, conv);
+                conv.prefix = wire_prefix(env, system, conv);
                 conv.thinking_from = conv.messages.len();
-                complete(env, emit, conv.id, &context::request(conv, env, &system, false)).await?
+                complete(env, emit, conv.id, &context::request(conv, env, system, false)).await?
             }
             // Reasoning bound to an older state of the conversation: one retry without the reasoning blocks.
             Err(e) if llm::thinking_rejected(&e) => {
                 // Later steps of this turn keep only the reasoning they produce themselves.
                 conv.thinking_from = conv.messages.len();
-                complete(env, emit, conv.id, &context::request(conv, env, &system, false)).await?
+                complete(env, emit, conv.id, &context::request(conv, env, system, false)).await?
             }
             done => done?,
         };
@@ -178,4 +220,36 @@ fn commit_tool(conv: &mut Conversation, emit: &Emitter, call: &ToolCall, output:
 fn commit(conv: &mut Conversation, emit: &Emitter, msg: Message) {
     conv.push(msg.clone());
     emit.send(Event::Message { conv: conv.id, msg });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{route::Source, skill::Skill};
+
+    fn simple() -> Route {
+        Route {
+            skill: Skill::Chat,
+            source: Source::Jev,
+            confidence: 0.9,
+            web: 0.0,
+            code: 0.0,
+            risk: 0.0,
+            blast: 0.0,
+            apps: 0.0,
+            playbook: None,
+            effort: None,
+            simple: 0.95,
+        }
+    }
+
+    #[test]
+    fn a_failed_delegation_reruns_on_the_main_engine() {
+        let s = Settings::default();
+        assert_eq!(pick(&simple(), &s, true, false), Pick::Helper);
+        assert_eq!(pick(&simple(), &s, true, true), Pick::Main, "images : seul le moteur principal les voit");
+        assert_eq!(pick(&simple(), &s, false, false), Pick::Main, "helper absent");
+        assert_eq!(pick(&simple(), &Settings { delegate: false, ..s.clone() }, true, false), Pick::Main);
+        assert_eq!(pick(&Route { code: 0.9, ..simple() }, &s, true, false), Pick::Main);
+    }
 }

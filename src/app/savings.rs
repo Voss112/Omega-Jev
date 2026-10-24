@@ -19,6 +19,7 @@ use crate::{
         settings::Settings,
         tool::ToolKind,
     },
+    infra::llm::Llm,
     tools::{schema, webindex::WebIndex},
 };
 
@@ -48,8 +49,8 @@ pub fn measure(conv: &Conversation, env: &Env, body: &Value, usage: &Usage) -> S
     }
 }
 
-/// A request without any lever (compaction call): measured, nothing saved.
-pub fn plain(env: &Env, body: &Value, usage: &Usage) -> Sample {
+/// A request without any lever (compaction call), billed at the rates of the engine that served it.
+pub fn plain(llm: &Llm, body: &Value, usage: &Usage) -> Sample {
     let mut images = false;
     let bytes = text_bytes(body, &mut images);
     Sample {
@@ -60,7 +61,7 @@ pub fn plain(env: &Env, body: &Value, usage: &Usage) -> Sample {
         bytes,
         images,
         levers: Levers::default(),
-        rates: Rates::of(env.llm.engine, &env.llm.model),
+        rates: Rates::of(llm.engine, &llm.model),
     }
 }
 

@@ -41,6 +41,8 @@ pub struct Env {
     pub settings: Settings,
     pub http: Client,
     pub llm: Llm,
+    /// DeepSeek Flash for delegated work (simple turns, summaries) while another engine is active.
+    pub helper: Option<Llm>,
     pub jev: Option<Jev>,
     pub web: Arc<WebIndex>,
 }
@@ -49,13 +51,33 @@ impl Env {
     pub fn new(settings: Settings, web: Arc<WebIndex>) -> Result<Self> {
         let http = http::client(&settings.proxy)?;
         let llm = Llm::new(http.clone(), &settings, settings.engine);
+        let helper = (settings.delegate && settings.engine != Engine::DeepSeek)
+            .then(|| Llm::new(http.clone(), &settings, Engine::DeepSeek))
+            .filter(Llm::configured);
         let jev_key = if settings.jev_key.trim().is_empty() {
             std::env::var("TYPESAFE_API_KEY").unwrap_or_default()
         } else {
             settings.jev_key.trim().to_owned()
         };
         let jev = Jev::new(http.clone(), &settings.jev_url, &jev_key, &settings.jev_model);
-        Ok(Self { settings, http, llm, jev, web })
+        Ok(Self { settings, http, llm, helper, jev, web })
+    }
+
+    /// Same environment, another engine (a delegated turn, or the effort Jev picked).
+    pub fn with_llm(&self, llm: Llm) -> Self {
+        Self {
+            settings: self.settings.clone(),
+            http: self.http.clone(),
+            llm,
+            helper: None,
+            jev: self.jev.clone(),
+            web: self.web.clone(),
+        }
+    }
+
+    /// The engine that writes conversation summaries.
+    pub fn summarizer(&self) -> &Llm {
+        self.helper.as_ref().unwrap_or(&self.llm)
     }
 
     pub fn workspace(&self) -> PathBuf {

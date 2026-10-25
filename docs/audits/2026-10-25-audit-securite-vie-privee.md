@@ -115,6 +115,9 @@ charge s'exécute avec les droits de l'utilisateur, sans passer par le garde du 
   commande reste soumise au garde et à la confirmation.
 - **Jev** : le routeur reçoit les 1 500 premiers caractères de chaque demande (`router.rs:77`). Choix de
   conception ; sans clé Jev, le routage est local.
+- **`installer/build-msi.ps1`** : sous PowerShell 5.1, `ErrorActionPreference = 'Stop'` transformait la sortie
+  d'avancement de `cargo` (stderr) en `NativeCommandError` alors que la compilation réussissait. La préférence est
+  relâchée le temps de l'appel, le code de sortie reste vérifié.
 
 ## 5. Candidats rejetés (SUSPECT, non démontrés)
 

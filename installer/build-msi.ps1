@@ -9,7 +9,11 @@ New-Item -ItemType Directory -Force -Path $obj | Out-Null
 
 Push-Location $root
 try {
+    # cargo writes its progress to stderr; with ErrorActionPreference=Stop, PowerShell 5.1 turns that into a
+    # terminating NativeCommandError even when the build succeeds. Relax it for the call, then check the exit code.
+    $ErrorActionPreference = 'Continue'
     cargo build --release
+    $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
     & (Join-Path $wix 'candle.exe') -nologo -arch x64 "-dVersion=$version" "-dRoot=$root" -ext WixUIExtension -ext WixUtilExtension `
         -out (Join-Path $obj 'omega.wixobj') (Join-Path $PSScriptRoot 'omega.wxs')

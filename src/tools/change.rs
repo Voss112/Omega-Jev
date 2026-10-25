@@ -36,8 +36,14 @@ pub async fn apply(ctx: &ToolCtx<'_>, change: Change) -> Result<ToolOutput> {
         ensure!(approve(ctx, ApprovalKind::Edit, unified.clone(), reason).await, "change refused by the user");
     }
     let checkpoint = Checkpoint::new(ctx.conv, ctx.turn);
-    let (path, after) = (change.path.clone(), change.after);
+    let (path, after, before, rel) = (change.path.clone(), change.after, change.before, change.rel);
+    let approved = ctx.env.settings.confirm_edits;
     blocking(move || {
+        // The approval may have taken minutes: a file saved meanwhile (editor, user) is not overwritten by a stale plan.
+        if approved {
+            let now = path.is_file().then(|| fs::read(&path).map(|b| String::from_utf8_lossy(&b).into_owned())).transpose()?;
+            ensure!(now == before, "{rel} changed on disk while the edit waited for approval; re-read it and redo the edit");
+        }
         checkpoint.record(&path)?;
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;

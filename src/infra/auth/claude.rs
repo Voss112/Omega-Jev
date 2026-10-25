@@ -1,17 +1,21 @@
 //! Claude consumer subscription: OAuth PKCE against the public Claude Code client.
 
+use std::{path::Path, time::Instant};
+
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::{Value, json};
 
-use super::{oauth_error, pkce};
-use crate::domain::auth::{Cred, Window};
+use super::{RateLimited, oauth_error, pkce};
+use crate::domain::auth::{Cred, Provider, Window};
 
-pub const AUTHORIZE: &str = "https://claude.ai/oauth/authorize";
-pub const TOKEN: &str = "https://console.anthropic.com/v1/oauth/token";
+// Same endpoints as the official Claude Code CLI 2.1 (console.anthropic.com moved to platform.claude.com).
+pub const AUTHORIZE: &str = "https://claude.com/cai/oauth/authorize";
+pub const TOKEN: &str = "https://platform.claude.com/v1/oauth/token";
 pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-pub const REDIRECT: &str = "https://console.anthropic.com/oauth/code/callback";
-pub const SCOPE: &str = "org:create_api_key user:profile user:inference";
+pub const REDIRECT: &str = "https://platform.claude.com/oauth/code/callback";
+/// Only what Omega uses: inference and the plan usage (no API-key creation right).
+pub const SCOPE: &str = "user:profile user:inference";
 /// Required on subscription tokens; the API rejects them otherwise.
 pub const BETA: &str = "oauth-2025-04-20";
 /// Subscription tokens are only honoured when the first system block is exactly this.
@@ -19,6 +23,8 @@ pub const SYSTEM_PREFIX: &str = "You are Claude Code, Anthropic's official CLI f
 pub const API: &str = "https://api.anthropic.com";
 pub const USAGE: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const VERSION: &str = "2023-06-01";
+/// Session file of the official CLI, inside `cli_dir()`.
+const CLI_FILE: &str = ".credentials.json";
 
 /// Browser URL the user validates on claude.ai, then pastes the displayed code back.
 pub fn authorize_url(p: &pkce::Pkce) -> String {
@@ -40,6 +46,11 @@ pub fn split_code(pasted: &str) -> (String, String) {
 }
 
 pub async fn exchange(http: &Client, pasted: &str, verifier: &str, default_state: &str) -> Result<Cred> {
+    // A pending 429 would only be extended by another request: Claude Code's session stands in meanwhile.
+    let pending = super::paused(Provider::Claude).throttle(Provider::Claude, Instant::now());
+    if let Some(error) = pending {
+        return cli_session().ok_or(error);
+    }
     let (code, state) = split_code(pasted);
     let state = if state.is_empty() { default_state.to_owned() } else { state };
     let body = json!({
@@ -50,111 +61,115 @@ pub async fn exchange(http: &Client, pasted: &str, verifier: &str, default_state
         "redirect_uri": REDIRECT,
         "code_verifier": verifier,
     });
-    cli_fallback(token(http, &body).await)
+    match post(http, &body).await {
+        Ok(v) => {
+            let cred = cred_of(&v)?;
+            let account = if cred.account.is_empty() { "claude".to_owned() } else { cred.account };
+            Ok(Cred { account, ..cred })
+        }
+        Err(e) if e.is::<RateLimited>() => {
+            let error = super::paused(Provider::Claude).fail(Provider::Claude, e, Instant::now());
+            cli_session().ok_or(error)
+        }
+        Err(e) => Err(e),
+    }
 }
 
+/// Renews through the token endpoint. A session shared with Claude Code uses the CLI's latest refresh token (it
+/// rotates on every refresh) and writes the new pair back, as Claude Code does between its own processes.
 pub async fn refresh(http: &Client, cred: &Cred) -> Result<Cred> {
-    let body = json!({ "grant_type": "refresh_token", "refresh_token": cred.refresh, "client_id": CLIENT_ID });
-    let mut renewed = cli_fallback(token(http, &body).await)?;
+    let dir = cli_dir();
+    let cli = dir.as_deref().and_then(import_cli).filter(|c| shared(cred, c));
+    let spent = cli.as_ref().map_or(cred.refresh.as_str(), |c| c.refresh.as_str()).to_owned();
+    anyhow::ensure!(!spent.trim().is_empty(), "Claude : session expirée — reconnectez-vous dans ⚙ Paramètres.");
+    let body = json!({ "grant_type": "refresh_token", "refresh_token": spent, "client_id": CLIENT_ID });
+    let v = post(http, &body).await?;
+    let mut renewed = cred_of(&v)?;
     if renewed.refresh.is_empty() {
-        renewed.refresh.clone_from(&cred.refresh);
+        renewed.refresh.clone_from(&spent);
     }
-    renewed.account = if renewed.account.is_empty() { cred.account.clone() } else { renewed.account };
+    renewed.cli = cli.is_some();
+    if let (Some(_), Some(dir)) = (&cli, &dir) {
+        write_back(&dir.join(CLI_FILE), &spent, &renewed, &v);
+    }
     Ok(renewed)
 }
 
-/// 429 from the token endpoint; `wait` is the server's `Retry-After` when it sent one.
-#[derive(Debug)]
-pub struct RateLimited {
-    pub wait: Option<std::time::Duration>,
+/// One token-endpoint call: a 429 becomes `RateLimited` (the caller pauses), any other refusal a readable error.
+async fn post(http: &Client, body: &Value) -> Result<Value> {
+    let res = http
+        .post(TOKEN)
+        .header("content-type", "application/json")
+        .json(body)
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .context("connexion au serveur de jetons Claude")?;
+    let status = res.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(RateLimited { provider: Provider::Claude, wait: super::retry_after(&res) }.into());
+    }
+    let text = res.text().await.unwrap_or_default();
+    if !status.is_success() {
+        anyhow::bail!("Claude {status} : {}", oauth_error(&text));
+    }
+    serde_json::from_str(&text).context("réponse de jeton illisible")
 }
 
-impl std::fmt::Display for RateLimited {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.wait {
-            Some(wait) => write!(
-                f,
-                "Anthropic limite l'échange de jetons depuis cette connexion (429). Réessayez dans {} s, \
-                 importez la session Claude Code, ou collez un jeton d'abonnement (sk-ant-oat…).",
-                wait.as_secs().max(1)
-            ),
-            None => write!(
-                f,
-                "Anthropic limite l'échange de jetons depuis cette connexion (429). Réessayez dans une minute, \
-                 importez la session Claude Code, ou collez un jeton d'abonnement (sk-ant-oat…)."
-            ),
-        }
-    }
+/// Credentials out of a token answer; `account` stays empty when the answer names none (the caller keeps its own).
+fn cred_of(v: &Value) -> Result<Cred> {
+    let access = v["access_token"].as_str().unwrap_or_default().to_owned();
+    anyhow::ensure!(!access.is_empty(), "réponse de jeton sans access_token");
+    let expires_in = v["expires_in"].as_i64().filter(|s| *s > 0).unwrap_or(3600);
+    Ok(Cred {
+        access,
+        refresh: v["refresh_token"].as_str().unwrap_or_default().to_owned(),
+        expires_at: chrono::Utc::now().timestamp().saturating_add(expires_in),
+        account: v["account"]["email_address"].as_str().or_else(|| v["subscriptionType"].as_str()).unwrap_or_default().to_owned(),
+        ..Cred::default()
+    })
 }
 
-impl std::error::Error for RateLimited {}
-
-/// `Retry-After` is sent in seconds by Anthropic. Anything else means "retry with the default".
-fn parse_retry_after(value: Option<&str>) -> Option<std::time::Duration> {
-    value?.trim().parse::<u64>().ok().map(std::time::Duration::from_secs)
+/// Imported from Claude Code, or still holding the refresh token Claude Code has on disk.
+fn shared(cred: &Cred, cli: &Cred) -> bool {
+    cred.cli || (!cred.refresh.is_empty() && cred.refresh == cli.refresh)
 }
 
-/// A Claude Code session is already logged in on this machine; use it instead of failing on 429.
-fn cli_fallback(result: Result<Cred>) -> Result<Cred> {
-    let Err(error) = result else {
-        return result;
-    };
-    if error.downcast_ref::<RateLimited>().is_none() {
-        return Err(error);
-    }
-    let Some(dir) = cli_dir() else {
-        return Err(error);
-    };
-    match import_cli(&dir) {
-        Some(cred) if usable(&cred, chrono::Utc::now().timestamp()) => Ok(cred),
-        _ => Err(error),
-    }
+/// Claude Code renewed the shared session already: its token is taken as is, without any request.
+pub fn adopt(cred: &Cred) -> Option<Cred> {
+    cli_session().filter(|c| shared(cred, c) && c.access != cred.access)
+}
+
+/// The session Claude Code keeps on this machine, while it stays valid for a while.
+pub fn cli_session() -> Option<Cred> {
+    import_cli(&cli_dir()?).filter(|c| usable(c, chrono::Utc::now().timestamp()))
 }
 
 fn usable(cred: &Cred, now: i64) -> bool {
     cred.expires_at == 0 || cred.expires_at - now > 60
 }
 
-async fn token(http: &Client, body: &Value) -> Result<Cred> {
-    const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
-    let mut attempt = 0;
-    loop {
-        let res = http
-            .post(TOKEN)
-            .header("content-type", "application/json")
-            .json(body)
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
-            .await
-            .context("connexion au serveur de jetons Claude")?;
-        let status = res.status();
-        let retry_after = parse_retry_after(res.headers().get("retry-after").and_then(|v| v.to_str().ok()));
-        // One retry is worth it when the server asks for a short wait; a long Retry-After is reported as-is.
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt == 0 && retry_after.is_none_or(|wait| wait <= MAX_WAIT) {
-            attempt = 1;
-            let wait =
-                retry_after.unwrap_or(std::time::Duration::from_secs(3)).clamp(std::time::Duration::from_secs(1), MAX_WAIT);
-            tokio::time::sleep(wait).await;
-            continue;
-        }
-        let text = res.text().await.unwrap_or_default();
-        if !status.is_success() {
-            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                return Err(RateLimited { wait: retry_after }.into());
-            }
-            anyhow::bail!("Claude {status} : {}", oauth_error(&text));
-        }
-        let v: Value = serde_json::from_str(&text).context("réponse de jeton illisible")?;
-        let access = v["access_token"].as_str().unwrap_or_default().to_owned();
-        anyhow::ensure!(!access.is_empty(), "réponse de jeton sans access_token");
-        let expires_in = v["expires_in"].as_u64().unwrap_or(3600);
-        return Ok(Cred {
-            access,
-            refresh: v["refresh_token"].as_str().unwrap_or_default().to_owned(),
-            expires_at: chrono::Utc::now().timestamp() + i64::try_from(expires_in).unwrap_or(3600),
-            account: v["subscriptionType"].as_str().unwrap_or("claude").to_owned(),
-            project: String::new(),
-        });
+/// Puts the renewed pair back into Claude Code's file, only if it still holds the token just spent (another
+/// process may have renewed it meanwhile): the compare-and-swap Claude Code applies between its own processes.
+/// Without it, Claude Code's next refresh would spend a dead token and sign it out.
+fn write_back(path: &Path, spent: &str, renewed: &Cred, answer: &Value) {
+    let Some(mut v) = std::fs::read_to_string(path).ok().and_then(|raw| serde_json::from_str::<Value>(&raw).ok()) else {
+        return;
+    };
+    let Some(oauth) = v.get_mut("claudeAiOauth").and_then(Value::as_object_mut) else { return };
+    if oauth.get("refreshToken").and_then(Value::as_str) != Some(spent) {
+        return;
+    }
+    oauth.insert("accessToken".into(), json!(renewed.access));
+    oauth.insert("refreshToken".into(), json!(renewed.refresh));
+    oauth.insert("expiresAt".into(), json!(renewed.expires_at.saturating_mul(1000)));
+    // Claude Code drops the refresh-token expiry when the server sends none for the new token.
+    match answer["refresh_token_expires_in"].as_i64() {
+        Some(secs) => oauth.insert("refreshTokenExpiresAt".into(), json!(chrono::Utc::now().timestamp().saturating_add(secs) * 1000)),
+        None => oauth.remove("refreshTokenExpiresAt"),
+    };
+    if let Ok(bytes) = serde_json::to_vec(&v) {
+        let _ = crate::infra::store::write_private(path, &bytes);
     }
 }
 
@@ -172,17 +187,18 @@ pub fn import_token(token: &str) -> Result<Cred> {
 }
 
 /// Imports the session the official Claude Code CLI already logged in (`<dir>/.credentials.json`).
-pub fn import_cli(dir: &std::path::Path) -> Option<Cred> {
-    let raw = std::fs::read_to_string(dir.join(".credentials.json")).ok()?;
+pub fn import_cli(dir: &Path) -> Option<Cred> {
+    let raw = std::fs::read_to_string(dir.join(CLI_FILE)).ok()?;
     let v: Value = serde_json::from_str(&raw).ok()?;
     let oauth = &v["claudeAiOauth"];
-    let access = oauth["accessToken"].as_str()?.to_owned();
+    let access = oauth["accessToken"].as_str().filter(|a| !a.is_empty())?.to_owned();
     Some(Cred {
         access,
         refresh: oauth["refreshToken"].as_str().unwrap_or_default().to_owned(),
         expires_at: oauth["expiresAt"].as_i64().map_or(0, |ms| ms / 1000),
         account: oauth["subscriptionType"].as_str().unwrap_or("claude-code").to_owned(),
         project: String::new(),
+        cli: true,
     })
 }
 
@@ -212,17 +228,17 @@ pub fn windows(v: &Value) -> Vec<Window> {
         ("seven_day_opus", crate::ui::tr("7 j Opus", "7 d Opus")),
         ("seven_day_sonnet", crate::ui::tr("7 j Sonnet", "7 d Sonnet")),
     ]
-        .into_iter()
-        .filter_map(|(key, label)| {
-            let w = &v[key];
-            let utilization = w["utilization"].as_f64()?;
-            Some(Window {
-                label: label.to_owned(),
-                fraction: (utilization / 100.0).clamp(0.0, 1.0) as f32,
-                resets: w["resets_at"].as_str().map(str::to_owned),
-            })
+    .into_iter()
+    .filter_map(|(key, label)| {
+        let w = &v[key];
+        let utilization = w["utilization"].as_f64()?;
+        Some(Window {
+            label: label.to_owned(),
+            fraction: (utilization / 100.0).clamp(0.0, 1.0) as f32,
+            resets: w["resets_at"].as_str().map(str::to_owned),
         })
-        .collect()
+    })
+    .collect()
 }
 
 /// Default on-disk location of the official CLI credentials.
@@ -238,17 +254,18 @@ mod tests {
     fn authorize_url_carries_pkce_and_scope() {
         let p = pkce::Pkce::new();
         let url = authorize_url(&p);
-        assert!(url.starts_with("https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e"));
+        assert!(url.starts_with("https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e"));
         for needle in [
             "response_type=code",
             "code_challenge_method=S256",
-            "redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback",
+            "redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback",
         ] {
             assert!(url.contains(needle), "manque {needle}");
         }
         assert!(url.contains(&format!("code_challenge={}", p.challenge)));
         assert!(url.contains(&format!("state={}", p.state)));
-        assert!(url.contains("scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference"));
+        assert!(url.contains("scope=user%3Aprofile%20user%3Ainference"));
+        assert!(!url.contains("create_api_key"), "aucun droit de création de clé API");
     }
 
     #[test]
@@ -277,15 +294,8 @@ mod tests {
         .unwrap();
         let c = import_cli(&dir).unwrap();
         assert_eq!((c.access.as_str(), c.refresh.as_str(), c.expires_at, c.account.as_str()), ("at", "rt", 1_700_000_000, "max"));
+        assert!(c.cli, "session partagée avec Claude Code");
         assert!(import_cli(&dir.join("nope")).is_none());
-    }
-
-    #[test]
-    fn a_rate_limit_carries_its_retry_delay() {
-        assert_eq!(parse_retry_after(Some("42")), Some(std::time::Duration::from_secs(42)));
-        assert_eq!(parse_retry_after(Some("later")), None);
-        let message = RateLimited { wait: Some(std::time::Duration::from_secs(42)) }.to_string();
-        assert!(message.contains("42 s") && message.contains("sk-ant-oat"));
     }
 
     #[test]
@@ -296,6 +306,45 @@ mod tests {
         assert!(usable(&fresh, now));
         assert!(!usable(&stale, now));
         assert!(usable(&Cred::default(), now), "expiration inconnue acceptée");
+    }
+
+    #[test]
+    fn a_session_is_shared_when_imported_or_holding_the_cli_refresh_token() {
+        let cli = Cred { refresh: "rt-cli".into(), cli: true, ..Cred::default() };
+        assert!(shared(&Cred { cli: true, refresh: "old".into(), ..Cred::default() }, &cli), "importée puis tournée par le CLI");
+        assert!(shared(&Cred { refresh: "rt-cli".into(), ..Cred::default() }, &cli), "import antérieur au marqueur");
+        assert!(!shared(&Cred { refresh: "rt-omega".into(), ..Cred::default() }, &cli), "connexion propre à Omega");
+        assert!(!shared(&Cred::default(), &Cred::default()), "deux jetons vides ne prouvent rien");
+    }
+
+    #[test]
+    fn the_renewed_pair_goes_back_only_over_the_token_just_spent() {
+        let dir = std::env::temp_dir().join(format!("omega-claude-writeback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CLI_FILE);
+        let original = r#"{"claudeAiOauth":{"accessToken":"a1","refreshToken":"r1","expiresAt":1,"refreshTokenExpiresAt":2,"scopes":["user:inference"]},"organizationUuid":"org"}"#;
+        std::fs::write(&path, original).unwrap();
+        let renewed = Cred { access: "a2".into(), refresh: "r2".into(), expires_at: 1_800_000_000, ..Cred::default() };
+        write_back(&path, "r-other", &renewed, &json!({}));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original, "renouvelée ailleurs entre-temps : fichier intact");
+        write_back(&path, "r1", &renewed, &json!({}));
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let oauth = &v["claudeAiOauth"];
+        assert_eq!((oauth["accessToken"].as_str(), oauth["refreshToken"].as_str()), (Some("a2"), Some("r2")));
+        assert_eq!(oauth["expiresAt"].as_i64(), Some(1_800_000_000_000));
+        assert!(oauth.get("refreshTokenExpiresAt").is_none(), "expiration de l'ancien jeton retirée");
+        assert_eq!((oauth["scopes"][0].as_str(), v["organizationUuid"].as_str()), (Some("user:inference"), Some("org")), "le reste est conservé");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_token_answer_names_its_account_or_leaves_it_to_the_caller() {
+        let v = json!({ "access_token": "at", "refresh_token": "rt", "expires_in": 28_800, "account": { "email_address": "me@x" } });
+        let c = cred_of(&v).unwrap();
+        assert_eq!((c.access.as_str(), c.refresh.as_str(), c.account.as_str()), ("at", "rt", "me@x"));
+        assert!(c.expires_at > chrono::Utc::now().timestamp() + 28_000);
+        assert_eq!(cred_of(&json!({ "access_token": "at" })).unwrap().account, "", "le libellé existant est gardé");
+        assert!(cred_of(&json!({})).is_err());
     }
 
     #[test]

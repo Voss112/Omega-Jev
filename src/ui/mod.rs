@@ -51,7 +51,7 @@ use tokio::{runtime::Runtime, task::JoinHandle};
 use uuid::Uuid;
 
 use crate::{
-    app::{inbox::Inbox,Approval, Emitter, Env, Event, health},
+    app::{Approval, Emitter, Env, Event, health, inbox::Inbox},
     domain::{
         auth::{Provider, Window},
         chat::Conversation,
@@ -68,6 +68,8 @@ const SIDEBAR_W: f32 = 284.0;
 const FILES_W: f32 = 262.0;
 const TOOLS_W: f32 = 312.0;
 const CHECKPOINT_MAX_AGE: Duration = Duration::from_hours(30 * 24);
+/// Proxy that accepts no connection: what an unparseable proxy setting falls back to.
+const BLACKHOLE: &str = "socks5h://127.0.0.1:9";
 
 pub fn run() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -185,6 +187,8 @@ pub struct App {
     tray_sync: bool,
     /// Update downloaded in the background, installed silently on exit.
     update: Option<std::path::PathBuf>,
+    /// Release polling loop (aborted when auto-update is turned off).
+    update_task: Option<JoinHandle<()>>,
 }
 
 impl App {
@@ -256,6 +260,7 @@ impl App {
             tray: None,
             tray_sync: false,
             update: None,
+            update_task: None,
         };
         if let Some(n) = unreadable.or(notice) {
             app.notify(n);
@@ -371,9 +376,15 @@ fn build_env(settings: &Settings, web: &Arc<WebIndex>, inbox: &Inbox) -> (Arc<En
     let (mut env, notice) = match Env::new(settings.clone(), web.clone()) {
         Ok(env) => (env, None),
         Err(e) => {
-            let fallback = Settings { proxy: String::new(), ..settings.clone() };
-            let env = Env::new(fallback, web.clone()).expect("client HTTP sans proxy");
-            (env, Some(format!("{} : {e:#}", i18n::tr("Proxy ignoré", "Proxy ignored"))))
+            // Fail closed: a mistyped Tor/proxy address must not silently send everything out directly. Port 9 of
+            // the loopback has no listener, so every request fails until the setting is fixed.
+            let fallback = Settings { proxy: BLACKHOLE.to_owned(), ..settings.clone() };
+            let env = Env::new(fallback, web.clone()).expect("client HTTP (proxy local fermé)");
+            let notice = i18n::tr(
+                "Proxy invalide : connexions bloquées jusqu'à sa correction (⚙ Paramètres)",
+                "Invalid proxy: connections blocked until it is fixed (⚙ Settings)",
+            );
+            (env, Some(format!("{notice} — {e:#}")))
         }
     };
     env.inbox = inbox.clone();
@@ -515,10 +526,12 @@ impl App {
                     .shadow(egui::Shadow { offset: [0, 10], blur: 30, spread: 0, color: egui::Color32::from_black_alpha(140) });
                 frame
                     .show(ui, |ui| {
+                        // A long notice (an error with its remedy) wraps instead of running off the window.
+                        ui.set_max_width((over.width() - 80.0).clamp(240.0, 640.0));
                         ui.horizontal(|ui| {
                             let (rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                             icons::paint(ui.painter(), rect, icons::Icon::Sparkle, theme::ACCENT_HI);
-                            ui.label(egui::RichText::new(text).size(13.0).color(theme::TEXT));
+                            ui.add(egui::Label::new(egui::RichText::new(text).size(13.0).color(theme::TEXT)).wrap());
                         });
                     })
                     .response

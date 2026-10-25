@@ -11,13 +11,17 @@ use crate::{
 const EVERY: Duration = Duration::from_secs(6 * 3600);
 
 impl App {
-    /// Background loop polling the GitHub releases while auto-update is on.
+    /// Background loop polling the GitHub releases while auto-update is on (one loop at most, on the current
+    /// HTTP client: a proxy set later is honoured, and turning the option off stops the polling).
     pub(super) fn start_updates(&mut self) {
+        if let Some(task) = self.update_task.take() {
+            task.abort();
+        }
         if !self.settings.auto_update {
             return;
         }
         let (http, emit) = (self.env.http.clone(), self.emit.clone());
-        self.spawn(async move {
+        self.update_task = Some(self.spawn(async move {
             loop {
                 match update::fetch(&http, env!("CARGO_PKG_VERSION"), &paths::updates()).await {
                     Ok(Some(msi)) => {
@@ -29,7 +33,7 @@ impl App {
                 }
                 tokio::time::sleep(EVERY).await;
             }
-        });
+        }));
     }
 
     /// On exit: hands the downloaded MSI to msiexec (it replaces the files once Omega is gone).

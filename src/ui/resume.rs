@@ -49,10 +49,18 @@ impl App {
         self.waiting.0.insert(id, windows);
         // Read the quota again now rather than in up to 30 s.
         self.usage_polled.remove(&Provider::Claude);
-        self.notify(super::i18n::tr(
-            "Limite Claude atteinte : reprise automatique dès que le quota retombe",
-            "Claude limit reached: resuming automatically once the quota drops",
-        ));
+        // A throttled token renewal is not the plan limit: the next quota reading proves the token works again.
+        self.notify(if crate::infra::auth::renewal_throttled(error) {
+            super::i18n::tr(
+                "Renouvellement du jeton Claude limité (429, pas votre quota) : reprise automatique dès qu'il passe",
+                "Claude token renewal rate-limited (429, not your quota): resuming automatically once it goes through",
+            )
+        } else {
+            super::i18n::tr(
+                "Limite Claude atteinte : reprise automatique dès que le quota retombe",
+                "Claude limit reached: resuming automatically once the quota drops",
+            )
+        });
         true
     }
 

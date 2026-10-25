@@ -245,6 +245,19 @@ mod tests {
     }
 
     #[test]
+    fn a_non_utf8_file_is_never_edited_in_place() {
+        let dir = std::env::temp_dir().join(format!("omega-test-latin1-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("l.txt"), b"caf\xe9 au lait\n").unwrap();
+        let err = super::fs::plan_edit(&dir, "l.txt", "lait", "miel", false, None).err().unwrap();
+        assert!(err.to_string().contains("not UTF-8"), "{err}");
+        std::fs::write(dir.join("l.rs"), b"fn a() { let s = \"\xe9\"; }\n").unwrap();
+        assert!(super::code::plan_replace(&dir, "l.rs", "a", "fn a() {}").is_err(), "replace_symbol aussi");
+        assert!(super::fs::read(&dir, "l.txt", None, None).unwrap().contains("caf"), "la lecture reste possible");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn edit_file_replaces_a_block_given_its_first_and_last_lines() {
         let dir = std::env::temp_dir().join(format!("omega-test-until-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

@@ -65,6 +65,9 @@ pub struct Cred {
     pub account: String,
     /// Gemini Code Assist project id (empty for other providers).
     pub project: String,
+    /// Claude: session shared with the official Claude Code CLI (`~/.claude/.credentials.json`), whose rotating
+    /// refresh token both apps renew.
+    pub cli: bool,
 }
 
 /// Tokens never reach a log, a panic message or a debug print.
@@ -76,6 +79,7 @@ impl std::fmt::Debug for Cred {
             .field("expires_at", &self.expires_at)
             .field("account", &self.account)
             .field("project", &self.project)
+            .field("cli", &self.cli)
             .finish()
     }
 }

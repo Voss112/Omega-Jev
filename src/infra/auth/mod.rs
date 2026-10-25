@@ -2,7 +2,8 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -21,6 +22,121 @@ pub mod pkce;
 
 /// A token is refreshed this many seconds before it expires, so a request never races expiry.
 const MARGIN: i64 = 120;
+/// First pause after a refused refresh; it doubles with each consecutive refusal up to `PAUSE_MAX`.
+const PAUSE_FIRST: Duration = Duration::from_secs(60);
+const PAUSE_MAX: Duration = Duration::from_secs(15 * 60);
+
+/// The token endpoint answered 429. `wait`: the server's `Retry-After`, then the pause Omega actually keeps.
+#[derive(Debug)]
+pub struct RateLimited {
+    pub provider: Provider,
+    pub wait: Option<Duration>,
+}
+
+impl std::fmt::Display for RateLimited {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let secs = self.wait.map_or(60, |w| w.as_secs().max(1));
+        let when = if secs >= 120 { format!("{} min", secs.div_ceil(60)) } else { format!("{secs} s") };
+        let (en, label) = (crate::ui::english(), self.provider.label());
+        let instead = match (self.provider, en) {
+            (Provider::Claude, false) => {
+                " Sans attendre : importez la session Claude Code ou collez un jeton d'abonnement (claude setup-token → sk-ant-oat…)."
+            }
+            (Provider::Claude, true) => {
+                " To skip the wait: import the Claude Code session or paste a subscription token (claude setup-token → sk-ant-oat…)."
+            }
+            _ => "",
+        };
+        if en {
+            write!(f, "{label} is rate-limiting token renewals from this connection {NOT_QUOTA_EN}. Omega retries in {when}.{instead}")
+        } else {
+            write!(f, "{label} limite le renouvellement des jetons depuis cette connexion {NOT_QUOTA_FR}. Omega réessaie dans {when}.{instead}")
+        }
+    }
+}
+
+impl std::error::Error for RateLimited {}
+
+const NOT_QUOTA_FR: &str = "(429) — ce n'est pas votre quota";
+const NOT_QUOTA_EN: &str = "(429) — not your plan quota";
+
+/// A turn failed on a token-renewal 429 (`RateLimited`), not on the plan limit: the quota is not reached.
+pub fn renewal_throttled(error: &str) -> bool {
+    error.contains(NOT_QUOTA_FR) || error.contains(NOT_QUOTA_EN)
+}
+
+/// `Retry-After` in seconds (the form OAuth servers send); anything else means "Omega's own schedule".
+fn retry_after(res: &reqwest::Response) -> Option<Duration> {
+    res.headers().get("retry-after")?.to_str().ok()?.trim().parse::<u64>().ok().map(Duration::from_secs)
+}
+
+/// Last refused refresh of a provider, and how long every handle leaves the token endpoint alone: polls,
+/// warm-ups and requests retrying at once would keep a rate limit alive forever.
+struct Pause {
+    until: Option<Instant>,
+    strikes: u32,
+    error: String,
+    throttled: bool,
+}
+
+impl Pause {
+    const fn new() -> Self {
+        Self { until: None, strikes: 0, error: String::new(), throttled: false }
+    }
+
+    /// The standing refusal with its remaining time; `None` once the pause is over.
+    fn active(&self, provider: Provider, now: Instant) -> Option<anyhow::Error> {
+        let left = self.until.map(|until| until.saturating_duration_since(now)).filter(|left| !left.is_zero())?;
+        Some(if self.throttled { RateLimited { provider, wait: Some(left) }.into() } else { anyhow::anyhow!("{}", self.error) })
+    }
+
+    /// A pending 429 only: a login still goes through after any other refusal (it is the cure for it).
+    fn throttle(&self, provider: Provider, now: Instant) -> Option<anyhow::Error> {
+        self.active(provider, now).filter(|_| self.throttled)
+    }
+
+    /// Records a refused refresh and returns the error to report (a 429 carries the pause actually kept).
+    /// A network failure (offline, timeout) pauses nothing: the next attempt may well succeed.
+    fn fail(&mut self, provider: Provider, error: anyhow::Error, now: Instant) -> anyhow::Error {
+        if error.chain().any(|e| e.is::<reqwest::Error>()) {
+            return error;
+        }
+        let server = error.downcast_ref::<RateLimited>().map(|r| r.wait);
+        let doubled = PAUSE_FIRST.saturating_mul(1 << self.strikes.min(8)).min(PAUSE_MAX);
+        let wait = server.flatten().map_or(doubled, |w| w.clamp(Duration::from_secs(1), Duration::from_secs(3600)));
+        self.until = Some(now + wait);
+        self.strikes = self.strikes.saturating_add(1);
+        self.throttled = server.is_some();
+        self.error = format!("{error:#}");
+        if self.throttled { RateLimited { provider, wait: Some(wait) }.into() } else { error }
+    }
+
+    fn clear(&mut self) {
+        *self = Self::new();
+    }
+}
+
+/// Process-wide, per provider: every `Auth` handle (chat, quota poll, warm-up, model list) shares it.
+fn paused(provider: Provider) -> MutexGuard<'static, Pause> {
+    static PAUSES: [Mutex<Pause>; Provider::ALL.len()] = [const { Mutex::new(Pause::new()) }; Provider::ALL.len()];
+    PAUSES[provider as usize].lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Credentials another program already renewed on this machine (Claude Code's shared session).
+fn adopted(provider: Provider, cred: &Cred) -> Option<Cred> {
+    match provider {
+        Provider::Claude => claude::adopt(cred),
+        Provider::Gemini | Provider::GitHub => None,
+    }
+}
+
+/// A still-valid session to fall back on when a refresh is refused (Claude Code's own one).
+fn fallback(provider: Provider) -> Option<Cred> {
+    match provider {
+        Provider::Claude => claude::cli_session(),
+        Provider::Gemini | Provider::GitHub => None,
+    }
+}
 
 /// base64url without padding (PKCE verifier, challenge, hashes).
 pub fn b64_encode(bytes: &[u8]) -> String {
@@ -122,10 +238,11 @@ impl Auth {
         if !self.needs_refresh(now) {
             return Ok(self.access());
         }
-        if current.refresh.trim().is_empty() {
-            bail!("{} : session expirée — reconnectez-vous dans ⚙ Paramètres.", self.provider.label());
-        }
-        let renewed = refresh(http, self.provider, &current).await?;
+        // Renewed by another program (Claude Code's shared session): no request at all.
+        let renewed = match adopted(self.provider, &current) {
+            Some(cred) => cred,
+            None => self.renew(http, &current).await?,
+        };
         let account = if renewed.account.is_empty() { current.account } else { renewed.account };
         let project = if renewed.project.is_empty() { current.project } else { renewed.project };
         let cred = Cred { account, project, ..renewed };
@@ -133,6 +250,28 @@ impl Auth {
         self.replace(cred.clone());
         write_to(&self.dir, self.provider, &cred)?;
         Ok(cred.access)
+    }
+
+    /// Network refresh, unless the provider refused one a moment ago: asking again would only extend a rate
+    /// limit or repeat the same refusal. Meanwhile a valid Claude Code session stands in.
+    async fn renew(&self, http: &Client, current: &Cred) -> Result<Cred> {
+        let standing = paused(self.provider).active(self.provider, Instant::now());
+        if let Some(error) = standing {
+            return fallback(self.provider).ok_or(error);
+        }
+        if current.refresh.trim().is_empty() && !current.cli {
+            bail!("{} : session expirée — reconnectez-vous dans ⚙ Paramètres.", self.provider.label());
+        }
+        match refresh(http, self.provider, current).await {
+            Ok(renewed) => {
+                paused(self.provider).clear();
+                Ok(renewed)
+            }
+            Err(e) => {
+                let error = paused(self.provider).fail(self.provider, e, Instant::now());
+                fallback(self.provider).ok_or(error)
+            }
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Cred> {
@@ -207,6 +346,43 @@ mod tests {
         let token = stale.fresh(&crate::infra::http::client("").unwrap()).await.unwrap();
         assert_eq!(token, "a2");
         assert_eq!(stale.cred().refresh, "r2");
+    }
+
+    #[test]
+    fn a_refused_refresh_pauses_every_handle_and_doubles() {
+        use std::time::{Duration, Instant};
+        let (now, mut pause) = (Instant::now(), super::Pause::new());
+        assert!(pause.active(Provider::Claude, now).is_none());
+        let refused = pause.fail(Provider::Claude, anyhow::anyhow!("Claude 400 : invalid_grant"), now);
+        assert!(refused.to_string().contains("invalid_grant"));
+        assert!(pause.active(Provider::Claude, now + Duration::from_secs(59)).is_some_and(|e| e.to_string().contains("invalid_grant")));
+        assert!(pause.active(Provider::Claude, now + Duration::from_secs(61)).is_none(), "1 min");
+        assert!(pause.throttle(Provider::Claude, now).is_none(), "un refus n'empêche pas de se reconnecter");
+        // Second refusal: twice as long; a 429 then carries the pause actually kept.
+        let limited = super::RateLimited { provider: Provider::Claude, wait: None };
+        let reported = pause.fail(Provider::Claude, limited.into(), now);
+        assert!(reported.to_string().contains("2 min") && super::renewal_throttled(&reported.to_string()), "{reported}");
+        assert!(pause.throttle(Provider::Claude, now + Duration::from_secs(119)).is_some());
+        assert!(pause.active(Provider::Claude, now + Duration::from_secs(121)).is_none());
+        // The server's own delay wins; a success clears everything.
+        let told = super::RateLimited { provider: Provider::Claude, wait: Some(Duration::from_secs(7)) };
+        assert!(pause.fail(Provider::Claude, told.into(), now).to_string().contains("7 s"));
+        pause.clear();
+        assert!(pause.active(Provider::Claude, now).is_none());
+        for _ in 0..20 {
+            pause.fail(Provider::Claude, anyhow::anyhow!("x"), now);
+        }
+        assert!(pause.active(Provider::Claude, now + super::PAUSE_MAX + Duration::from_secs(1)).is_none(), "plafond");
+    }
+
+    #[tokio::test]
+    async fn a_network_failure_pauses_nothing() {
+        let http = crate::infra::http::client("").unwrap();
+        // Port 9 (discard) on a public test address: the connection itself fails, no server answers.
+        let offline = http.get("https://192.0.2.1:9/").timeout(std::time::Duration::from_millis(50)).send().await.unwrap_err();
+        let mut pause = super::Pause::new();
+        pause.fail(Provider::Gemini, anyhow::Error::new(offline).context("connexion"), std::time::Instant::now());
+        assert!(pause.active(Provider::Gemini, std::time::Instant::now()).is_none());
     }
 
     #[test]

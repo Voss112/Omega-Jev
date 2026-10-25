@@ -120,8 +120,9 @@ fn github(env: &Env) -> Result<String> {
 }
 
 fn project_rules(env: &Env) -> Result<String> {
-    let (name, text) = prompts::project_rules(&env.workspace())
-        .ok_or_else(|| anyhow::anyhow!("aucun {} à la racine du projet", prompts::RULE_FILES[0]))?;
+    let (name, text) = prompts::project_rules(&env.workspace()).ok_or_else(|| {
+        anyhow::anyhow!("{} {} {}", tr("aucun", "no"), prompts::RULE_FILES[0], tr("à la racine du projet", "at the project root"))
+    })?;
     Ok(format!("{name} {} ({} {})", tr("chargé", "loaded"), text.len(), tr("car.", "chars")))
 }
 

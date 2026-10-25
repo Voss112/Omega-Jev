@@ -85,8 +85,10 @@ impl Dictation {
 /// Recorded audio, growing while the session runs (the microphone, or a recording in tests).
 trait Source {
     fn rate(&self) -> u32;
-    /// Mono samples from index `from` on.
-    fn since(&self, from: usize) -> Vec<f32>;
+    /// Mono samples not consumed yet.
+    fn pending(&self) -> Vec<f32>;
+    /// Drops the first `n` pending samples once they are transcribed.
+    fn consume(&self, n: usize);
     fn error(&self) -> Option<String>;
 }
 
@@ -95,8 +97,12 @@ impl Source for Mic {
         self.rate
     }
 
-    fn since(&self, from: usize) -> Vec<f32> {
-        Mic::since(self, from)
+    fn pending(&self) -> Vec<f32> {
+        Mic::pending(self)
+    }
+
+    fn consume(&self, n: usize) {
+        Mic::consume(self, n);
     }
 
     fn error(&self) -> Option<String> {
@@ -128,19 +134,18 @@ impl Session {
     fn listen(&mut self, source: &impl Source, whisper: &mut Transcriber, emit: &dyn Fn(Update)) -> Result<()> {
         let rate = source.rate();
         let mut vad = Vad::new(rate);
-        let mut cursor = 0;
         while !self.stop.load(Ordering::Relaxed) {
             thread::sleep(TICK);
             if let Some(e) = source.error() {
                 anyhow::bail!("micro perdu : {e}");
             }
-            let pending = source.since(cursor);
+            let pending = source.pending();
             if let Some(end) = vad.phrase_end(&pending) {
                 self.transcribe(whisper, &pending[..end], rate, emit)?;
-                cursor += end;
+                source.consume(end);
             }
         }
-        self.transcribe(whisper, &source.since(cursor), rate, emit)
+        self.transcribe(whisper, &source.pending(), rate, emit)
     }
 
     /// The model path, downloaded (and hash-checked) on first use.
@@ -214,7 +219,7 @@ mod tests {
     /// A finished recording played into the session as if it came from the microphone.
     struct Recording {
         rate: u32,
-        pcm: Vec<f32>,
+        pcm: std::sync::Mutex<Vec<f32>>,
     }
 
     impl Source for Recording {
@@ -222,8 +227,14 @@ mod tests {
             self.rate
         }
 
-        fn since(&self, from: usize) -> Vec<f32> {
-            self.pcm.get(from..).map_or_else(Vec::new, <[f32]>::to_vec)
+        fn pending(&self) -> Vec<f32> {
+            self.pcm.lock().unwrap().clone()
+        }
+
+        fn consume(&self, n: usize) {
+            let mut pcm = self.pcm.lock().unwrap();
+            let n = n.min(pcm.len());
+            pcm.drain(..n);
         }
 
         fn error(&self) -> Option<String> {
@@ -259,7 +270,8 @@ mod tests {
             Session { stop, level: Arc::new(AtomicU32::new(0)), language: "en".into(), prompt: String::new() };
         let (tx, rx) = mpsc::channel();
         let t = Instant::now();
-        session.listen(&Recording { rate, pcm }, &mut whisper, &|u| tx.send((t.elapsed(), u)).unwrap()).unwrap();
+        let recording = Recording { rate, pcm: std::sync::Mutex::new(pcm) };
+        session.listen(&recording, &mut whisper, &|u| tx.send((t.elapsed(), u)).unwrap()).unwrap();
         stopper.join().unwrap();
         let texts: Vec<(Duration, String)> = rx
             .try_iter()

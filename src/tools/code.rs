@@ -339,7 +339,7 @@ pub fn find(root: &Path, name: &str, body: bool) -> Result<String> {
 
 pub fn plan_replace(root: &Path, rel: &str, name: &str, code: &str) -> Result<Change> {
     let path = guard::resolve_writable(root, rel)?;
-    let src = wfs::read_text(&path)?;
+    let src = wfs::read_editable(&path)?;
     let (tree, symbols) = parse(&path, &src).context("unsupported language; use edit_file")?;
     let (qual, base) = split_name(name);
     let found: Vec<&Symbol> = symbols.iter().filter(|s| matches(s, qual, base)).collect();

@@ -39,7 +39,8 @@ pub const FILES: &[(&str, &str)] = bundle![
 /// Files the audit produced (`findings.json`, `coverage-ledger.json`, reports) are never touched.
 pub fn install(root: &Path) -> Result<String> {
     ensure!(root.is_dir(), "dossier de travail introuvable : {}", root.display());
-    let dir = root.join(".omega").join("skills").join("security-audit");
+    // Through the sandbox: a cloned repository could make `.omega` a link (junction) to anywhere else.
+    let dir = super::guard::resolve_writable(root, ".omega/skills/security-audit")?;
     std::fs::create_dir_all(&dir).with_context(|| format!("création {}", dir.display()))?;
     let mut updated = 0;
     for (name, body) in FILES {

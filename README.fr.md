@@ -84,7 +84,7 @@ Linux : paquets X11/Wayland usuels requis à l'exécution (comme toute app egui)
 
 - Données 100 % locales (`%APPDATA%/Omega` ou `~/.local/share/Omega`), fichiers en `0600` sous Linux.
 - Clés API chiffrées par DPAPI (liées à votre compte Windows).
-- Abonnements : jetons OAuth scellés dans `credentials/` (DPAPI), rafraîchis en série ; jeton Claude longue durée (`claude setup-token`) accepté sans échange réseau.
+- Abonnements : jetons OAuth scellés dans `credentials/` (DPAPI), rafraîchis en série ; jeton Claude longue durée (`claude setup-token`) accepté sans échange réseau. Un refus du serveur de jetons (429, `invalid_grant`) met le fournisseur en pause pour tout Omega (1 min, doublée jusqu'à 15 min) au lieu d'être relancé à chaque sondage ; pendant ce temps une session Claude Code valide sur la machine prend le relais. La session importée de Claude Code est partagée comme entre deux processus du CLI : jeton adopté sans requête quand le CLI l'a déjà renouvelé, sinon renouvelé puis réécrit dans `~/.claude/.credentials.json` (seulement si personne ne l'a changé entre-temps), pour que le CLI reste connecté.
 - Images : redimensionnées et stockées dans la discussion locale, jamais envoyées à un moteur qui ne les lit pas.
 - Voix : capturée et transcrite sur la machine ; aucun audio n'est enregistré sur disque ni envoyé. Le micro n'est ouvert que pendant la dictée.
 - Anti-SSRF : redirections et résolutions DNS vers des adresses privées refusées ; pages web marquées « non fiables ».

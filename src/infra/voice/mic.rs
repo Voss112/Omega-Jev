@@ -48,10 +48,16 @@ impl Mic {
         Ok(Self { _stream: stream, rate, shared })
     }
 
-    /// Mono samples recorded from index `from` on.
-    pub fn since(&self, from: usize) -> Vec<f32> {
-        let samples = self.shared.samples.lock().unwrap_or_else(PoisonError::into_inner);
-        samples.get(from..).map_or_else(Vec::new, <[f32]>::to_vec)
+    /// Mono samples recorded and not consumed yet.
+    pub fn pending(&self) -> Vec<f32> {
+        self.shared.samples.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// Drops the first `n` pending samples (transcribed): memory stays bounded by the phrase being spoken.
+    pub fn consume(&self, n: usize) {
+        let mut samples = self.shared.samples.lock().unwrap_or_else(PoisonError::into_inner);
+        let n = n.min(samples.len());
+        samples.drain(..n);
     }
 
     /// The device failed mid-recording (unplugged…).

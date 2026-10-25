@@ -109,7 +109,9 @@ mod tests {
 
     #[test]
     fn restore_brings_back_edited_and_removes_created_files() {
-        let dir = std::env::temp_dir().join("omega-test-checkpoint");
+        // Per-process and emptied first: a run killed midway must not leave a manifest the next run would reuse.
+        let dir = std::env::temp_dir().join(format!("omega-test-checkpoint-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let (edited, created) = (dir.join("a.txt"), dir.join("new.txt"));
         fs::write(&edited, "v1").unwrap();
@@ -122,6 +124,7 @@ mod tests {
         assert_eq!(cp.restore().unwrap(), 2);
         assert_eq!(fs::read_to_string(&edited).unwrap(), "v1");
         assert!(!created.exists() && !cp.exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

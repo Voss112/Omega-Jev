@@ -62,10 +62,25 @@ pub fn list(root: &Path, rel: &str, depth: usize) -> Result<String> {
     Ok(tree(&dir, depth, 250))
 }
 
-pub fn read_text(path: &Path) -> Result<String> {
+fn text_bytes(path: &Path) -> Result<Vec<u8>> {
     let bytes = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
     ensure!(!bytes[..bytes.len().min(8000)].contains(&0), "binary file");
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(bytes)
+}
+
+pub fn read_text(path: &Path) -> Result<String> {
+    Ok(String::from_utf8_lossy(&text_bytes(path)?).into_owned())
+}
+
+/// Text of a file about to be rewritten in place. Not UTF-8 is refused: the lossy text written back would replace
+/// every non-UTF-8 byte of the whole file (Latin-1/ANSI accents…) with U+FFFD.
+pub fn read_editable(path: &Path) -> Result<String> {
+    String::from_utf8(text_bytes(path)?).map_err(|_| {
+        anyhow::anyhow!(
+            "{} is not UTF-8 (Latin-1/ANSI?): an in-place edit would corrupt its accents; rewrite it whole with write_file",
+            path.display()
+        )
+    })
 }
 
 /// Lines `start..=end` (1-based) prefixed with their numbers.
@@ -100,7 +115,7 @@ pub fn plan_write(root: &Path, rel: &str, content: String) -> Result<Change> {
 
 pub fn plan_edit(root: &Path, rel: &str, old: &str, new: &str, all: bool, until: Option<&str>) -> Result<Change> {
     let path = guard::resolve_writable(root, rel)?;
-    let text = read_text(&path)?;
+    let text = read_editable(&path)?;
     ensure!(!old.is_empty(), "`old` is empty");
     let crlf = text.contains("\r\n") && !old.contains('\r');
     let native = |s: &str| if crlf { s.replace('\n', "\r\n") } else { s.to_owned() };

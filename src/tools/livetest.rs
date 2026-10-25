@@ -294,10 +294,13 @@ impl Runner {
     }
 
     fn stop(&self) {
-        if let Some(pid) = self.lock().pid.take() {
+        // Locks released first: `taskkill` blocks, and the output readers need the state meanwhile.
+        let pid = self.lock().pid.take();
+        if let Some(pid) = pid {
             shell::kill_tree(pid);
         }
-        if let Some(task) = self.task.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        let task = self.task.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(task) = task {
             task.abort();
         }
     }
@@ -351,6 +354,14 @@ pub async fn ensure(root: &Path) -> Option<Arc<Runner>> {
 /// The runner already watching `root`, without starting one.
 pub fn current(root: &Path) -> Option<Arc<Runner>> {
     runners().get(root).cloned()
+}
+
+/// Stops the workspace's watcher: web content reached the turn, and tests would run code nobody approved.
+pub fn stop(root: &Path) {
+    let runner = runners().remove(root);
+    if let Some(r) = runner {
+        r.stop();
+    }
 }
 
 /// Stops every watcher (option turned off, workspace changed, app closing): no orphan process survives.

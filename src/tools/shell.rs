@@ -51,8 +51,7 @@ pub async fn run(ctx: &ToolCtx<'_>, cmd: &str, timeout_secs: usize) -> Result<St
     let env = github_env(ctx);
     let mut command = process::line(cmd);
     command.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-    let out = run_command(command, &ctx.root, timeout_secs.clamp(1, 1800), cmd).await?;
-    Ok(redact(out, &env))
+    run_masked(command, &ctx.root, timeout_secs.clamp(1, 1800), cmd, &secrets(&env)).await
 }
 
 /// git and gh authenticated with the connected GitHub account, when the user shares it with the agent.
@@ -63,12 +62,22 @@ fn github_env(ctx: &ToolCtx<'_>) -> Vec<(String, String)> {
     Auth::load(Provider::GitHub).map(|a| github::shell_env(&a.access())).unwrap_or_default()
 }
 
-/// The token never reaches the model, even if a command prints its environment.
-fn redact(mut out: String, env: &[(String, String)]) -> String {
-    for (key, value) in env {
-        if matches!(key.as_str(), "GH_TOKEN" | "GIT_CONFIG_VALUE_0") && value.len() > 8 {
-            out = out.replace(value.as_str(), "«secret»");
-        }
+/// What the model must never see, even if a command prints its environment: the token, the Basic header and its
+/// base64 payload (the token, decoded).
+fn secrets(env: &[(String, String)]) -> Vec<String> {
+    env.iter()
+        .filter(|(key, _)| matches!(key.as_str(), "GH_TOKEN" | "GIT_CONFIG_VALUE_0"))
+        .flat_map(|(_, value)| {
+            let payload = value.strip_prefix("AUTHORIZATION: basic ").map(str::to_owned);
+            std::iter::once(value.clone()).chain(payload)
+        })
+        .filter(|s| s.len() > 8)
+        .collect()
+}
+
+fn redact(mut out: String, secrets: &[String]) -> String {
+    for secret in secrets {
+        out = out.replace(secret.as_str(), "«secret»");
     }
     out
 }
@@ -140,7 +149,13 @@ pub async fn execute(dir: &Path, cmd: &str, timeout_secs: usize) -> Result<Strin
 
 /// Runs a prepared command (no shell involved unless the caller built one): capped, timed, compressed.
 /// `line` is the command as typed, which picks the RTK filter (empty = generic only).
-pub async fn run_command(mut command: process::Command, dir: &Path, timeout_secs: usize, line: &str) -> Result<String> {
+pub async fn run_command(command: process::Command, dir: &Path, timeout_secs: usize, line: &str) -> Result<String> {
+    run_masked(command, dir, timeout_secs, line, &[]).await
+}
+
+/// `run_command` with `secrets` masked in the raw output, before compression: a token clipped by the compressor
+/// would slip past a mask applied afterwards.
+async fn run_masked(mut command: process::Command, dir: &Path, timeout_secs: usize, line: &str, secrets: &[String]) -> Result<String> {
     command.current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     command.process_group(0);
@@ -186,7 +201,7 @@ pub async fn run_command(mut command: process::Command, dir: &Path, timeout_secs
         text.push_str("\n(processus d'arrière-plan laissé en cours : sortie non attendue)");
     }
     let code = status.code().map_or_else(|| "killed".to_owned(), |c| c.to_string());
-    Ok(format!("exit {code}\n{}", compress::command(line, &text)))
+    Ok(format!("exit {code}\n{}", compress::command(line, &redact(text, secrets))))
 }
 
 /// A running child that takes its whole process tree down when dropped unfinished: `kill_on_drop` alone only
@@ -235,6 +250,17 @@ pub async fn probe() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_github_token_and_its_basic_payload_are_masked() {
+        let env = github::shell_env("gho_0123456789abcdef");
+        let hidden = secrets(&env);
+        let header = env.iter().find(|(k, _)| k == "GIT_CONFIG_VALUE_0").unwrap().1.clone();
+        let payload = header.trim_start_matches("AUTHORIZATION: basic ").to_owned();
+        let out = redact(format!("t=gho_0123456789abcdef h={header} b={payload}"), &hidden);
+        assert!(!out.contains("gho_0123456789abcdef") && !out.contains(&payload), "{out}");
+        assert_eq!(out.matches("«secret»").count(), 3, "{out}");
+    }
 
     #[cfg(windows)]
     #[tokio::test]

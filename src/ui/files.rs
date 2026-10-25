@@ -58,6 +58,8 @@ pub struct OpenFile {
     crlf: bool,
     truncated: bool,
     binary: bool,
+    /// Not UTF-8 (Latin-1/ANSI): saving the shown text would replace every accent with U+FFFD, so read-only.
+    lossy: bool,
     editing: bool,
     /// The agent (or another program) changed the file while it had unsaved edits.
     stale: bool,
@@ -67,7 +69,7 @@ pub struct OpenFile {
 
 impl OpenFile {
     fn read(path: &Path) -> std::io::Result<Self> {
-        let (raw, truncated) = read_text(path)?;
+        let (raw, truncated, lossy) = read_text(path)?;
         let binary = raw.contains('\u{0}');
         let crlf = raw.contains("\r\n");
         let text = if binary { tr("Fichier binaire : aperçu indisponible.", "Binary file: no preview.").to_owned() } else { raw.replace("\r\n", "\n") };
@@ -78,6 +80,7 @@ impl OpenFile {
             crlf,
             truncated,
             binary,
+            lossy,
             editing: false,
             stale: false,
             colours: None,
@@ -89,7 +92,7 @@ impl OpenFile {
     }
 
     fn editable(&self) -> bool {
-        !self.truncated && !self.binary
+        !self.truncated && !self.binary && !self.lossy
     }
 
     /// Writes the buffer back with the file's own line endings.
@@ -111,7 +114,8 @@ impl OpenFile {
             self.stale = true;
             return;
         }
-        *self = Self { editing: self.editing, ..fresh };
+        // A file that became binary, non-UTF-8 or too big meanwhile leaves edit mode.
+        *self = Self { editing: self.editing && fresh.editable(), ..fresh };
     }
 }
 
@@ -352,6 +356,8 @@ pub fn viewer(app: &mut App, ui: &mut Ui) {
         ui.label(RichText::new(&rel).font(theme::bold(14.0)).color(TEXT)).on_hover_text(file.path.display().to_string());
         if file.truncated {
             widgets::chip(ui, tr("tronqué à 512 Ko · lecture seule", "truncated to 512 KB · read-only"), AMBER);
+        } else if file.lossy && !file.binary {
+            widgets::chip(ui, tr("encodage non UTF-8 · lecture seule", "not UTF-8 · read-only"), AMBER);
         }
         if file.dirty() {
             widgets::chip(ui, tr("non enregistré", "unsaved"), AMBER);
@@ -416,7 +422,7 @@ pub fn viewer(app: &mut App, ui: &mut Ui) {
         }
         Some(Command::Reload) => {
             if let Ok(fresh) = OpenFile::read(&file.path) {
-                *file = OpenFile { editing: file.editing, ..fresh };
+                *file = OpenFile { editing: file.editing && fresh.editable(), ..fresh };
             }
         }
         Some(Command::Save) => match file.save() {
@@ -485,12 +491,16 @@ fn read_dir(dir: &Path) -> Vec<Entry> {
     entries
 }
 
-fn read_text(path: &Path) -> std::io::Result<(String, bool)> {
+/// `(text, truncated, lossy)`: `lossy` = not UTF-8, shown with replacement characters.
+fn read_text(path: &Path) -> std::io::Result<(String, bool, bool)> {
     let file = File::open(path)?;
     let len = file.metadata()?.len();
     let mut buf = Vec::with_capacity(len.min(MAX_READ) as usize);
     BufReader::new(file).take(MAX_READ).read_to_end(&mut buf)?;
-    Ok((String::from_utf8_lossy(&buf).into_owned(), len > MAX_READ))
+    Ok(match String::from_utf8(buf) {
+        Ok(text) => (text, len > MAX_READ, false),
+        Err(e) => (String::from_utf8_lossy(e.as_bytes()).into_owned(), len > MAX_READ, true),
+    })
 }
 
 /// Path relative to the workspace when possible, with `/` separators.
@@ -563,6 +573,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("x.bin"), [0u8, 1, 2]).unwrap();
         assert!(!OpenFile::read(&dir.join("x.bin")).unwrap().editable());
+        std::fs::write(dir.join("latin1.txt"), b"caf\xe9\n").unwrap();
+        let latin1 = OpenFile::read(&dir.join("latin1.txt")).unwrap();
+        assert!(latin1.lossy && !latin1.editable(), "un Ctrl+S remplacerait les accents par U+FFFD");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

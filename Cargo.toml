@@ -1,6 +1,6 @@
 [package]
 name = "omega"
-version = "0.9.9"
+version = "0.9.10"
 edition = "2024"
 description = "Omega — agent IA local et anonyme : Jev (System One) route, DeepSeek V4.1 Flash ou Claude (System Two) exécute"
 license = "MIT"
@@ -18,7 +18,7 @@ rfd = "0.17"
 open = "5"
 # Images collées / déposées (arboard est déjà tiré par egui pour le presse-papiers texte)
 arboard = { version = "3", features = ["image-data"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 # Dictée vocale locale : micro (WASAPI) + Whisper (whisper.cpp), rien ne quitte la machine
 cpal = "0.18"
 # Copie de whisper-rs 0.16.0 : seul changement, le type des enums C sous Windows/MinGW (voir vendor/README.md)

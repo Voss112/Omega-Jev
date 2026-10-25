@@ -97,7 +97,7 @@ Build from source (below). The usual X11/Wayland packages are required at runtim
 - **Bypass mode** (🔒/🔓) — accepts all permissions; destructive commands stay blocked.
 - **Clean process kill** — a timed-out or stopped command kills its whole process tree.
 - **Secrets stay secret** — API keys are DPAPI-encrypted, stripped from the environment of every process the agent starts, and never written in clear text (a DPAPI failure refuses the write).
-- **Subscriptions** — OAuth tokens sealed in `credentials/` (DPAPI).
+- **Subscriptions** — OAuth tokens sealed in `credentials/` (DPAPI). A refused token renewal (429, `invalid_grant`) pauses that provider for the whole app (1 min, doubling up to 15 min) instead of being retried by every poll; meanwhile a valid Claude Code session on the machine stands in. An imported Claude Code session is shared the way two CLI processes share it: adopted without a request when the CLI already renewed it, otherwise renewed and written back to `~/.claude/.credentials.json` (only if nobody changed it meanwhile), so the CLI stays signed in.
 - **Voice** — captured and transcribed on your machine. The microphone is open only while dictating.
 - **Network** — private-address redirects and DNS resolutions are refused (anti-SSRF), web pages are marked untrusted, optional Tor/SOCKS5 proxy (`socks5h://127.0.0.1:9050`), VPN detection, optional kill-switch. The exit-IP check (ipwho.is) is **off by default**.
 - **Local data only** — `%APPDATA%/Omega` on Windows, `~/.local/share/Omega` on Linux (files `0600`).

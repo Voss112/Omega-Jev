@@ -213,7 +213,11 @@ fn pools(v: &Value) -> Vec<crate::domain::auth::Window> {
         };
         let family = match id.split('-').next().unwrap_or(id) {
             "gpt" => "GPT".to_owned(),
-            f => f[..1].to_uppercase() + &f[1..],
+            f => {
+                // Char-wise: a byte slice would panic on an empty or non-ASCII id sent by the server.
+                let mut chars = f.chars();
+                chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_else(|| id.to_owned())
+            }
         };
         match rows.iter_mut().find(|(r, l, _)| r == reset && (l - left).abs() < 1e-6) {
             Some((_, _, families)) if !families.contains(&family) => families.push(family),
@@ -280,7 +284,16 @@ pub async fn run(bin: &Path, model: &str, effort: Effort, messages: &[Value], mu
     stdin.write_all(line.as_bytes()).await?;
     stdin.write_all(b"\n").await?;
     drop(stdin);
-    let (stdout, mut stderr) = (child.stdout.take().context("stdout agy")?, child.stderr.take().context("stderr agy")?);
+    let (stdout, stderr) = (child.stdout.take().context("stdout agy")?, child.stderr.take().context("stderr agy")?);
+    // Drained alongside stdout: a full stderr pipe would block agy before it ends its stdout (a deadlock until the
+    // timeout). Only the head is kept for the error message.
+    let errors = tokio::spawn(async move {
+        let mut head = Vec::new();
+        let mut stderr = stderr;
+        let _ = (&mut stderr).take(16 * 1024).read_to_end(&mut head).await;
+        let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+        String::from_utf8_lossy(&head).into_owned()
+    });
     let read = async {
         let mut out = Completion::default();
         let mut result = None;
@@ -305,8 +318,7 @@ pub async fn run(bin: &Path, model: &str, effort: Effort, messages: &[Value], mu
     };
     let (out, result) = tokio::time::timeout(TIMEOUT, read).await.context("agy : délai de 10 min dépassé")??;
     let status = child.wait().await?;
-    let mut err = String::new();
-    let _ = stderr.read_to_string(&mut err).await;
+    let err = errors.await.unwrap_or_default();
     let Some(result) = result else {
         bail!("Gemini (agy) sans réponse ({status}) : {}", err.trim().chars().take(400).collect::<String>());
     };
@@ -387,6 +399,17 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!((rows[0].label.as_str(), rows[1].label.as_str()), ("Claude · GPT", "Gemini"));
         assert!((rows[1].fraction - 0.25).abs() < 1e-6 && rows[0].fraction == 0.0);
+    }
+
+    #[test]
+    fn odd_model_ids_never_panic() {
+        let v = json!({ "buckets": [
+            { "modelId": "-x", "remainingFraction": 0.5, "resetTime": "t" },
+            { "modelId": "élan-1", "remainingFraction": 0.5, "resetTime": "t" },
+        ] });
+        let rows = pools(&v);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "-x · Élan");
     }
 
     /// Real quota of the signed-in agy: `cargo test -- --ignored agy_quota_live --nocapture`.

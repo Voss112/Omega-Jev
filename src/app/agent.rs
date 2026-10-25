@@ -60,15 +60,17 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
     let input = router::Input::of(conv);
     let (_, (route, jev_tokens)) = tokio::join!(compact::maybe(conv, env, emit), router::route(env, &input));
     let root = env.workspace();
-    // Tests start (or keep) running in the background while this turn codes.
-    let runner = if env.settings.live_tests && (route.needs_code() || route.routine_task()) {
+    let visible = conv.summary.as_ref().map_or(0, |s| s.upto).min(conv.messages.len());
+    let reads = Reads::from_history(&conv.messages[visible..]);
+    // Tests start (or keep) running in the background while this turn codes — unless web content is in the
+    // context: the watcher would run code an injected instruction may have written, with nobody asked.
+    let runner = if env.settings.live_tests && (route.needs_code() || route.routine_task()) && !watch_paused(env, &reads) {
         livetest::ensure(&root).await
     } else {
         None
     };
     let mut live = LiveTurn::new(runner);
     // A playbook summarized away by compaction is no longer on the wire: it must be sent again in full.
-    let visible = conv.summary.as_ref().map_or(0, |s| s.upto).min(conv.messages.len());
     let loaded: Vec<&str> =
         conv.messages[visible..].iter().rev().skip(1).filter_map(|m| m.route.as_ref()?.playbook.as_deref()).collect();
     let mut preamble = context::preamble(&route, &root, conv.user_turns() == 1, &loaded);
@@ -115,7 +117,6 @@ async fn turn_loop(conv: &mut Conversation, env: &Env, emit: &Emitter, turn: i64
         emit.send(Event::Usage { conv: conv.id, usage: Usage::jev(jev_tokens) });
     }
 
-    let reads = Reads::from_history(&conv.messages[visible..]);
     let images = conv.messages.last().is_some_and(|m| !m.images.is_empty());
     // Gemini via Antigravity answers in text only: a turn that needs tools must run on another engine.
     ensure!(
@@ -229,6 +230,11 @@ fn prune_idle_apps(conv: &mut Conversation, route: &Route) {
     conv.toolset.retain(|k| !APPS.contains(k) || wanted.contains(k) || recent.contains(k));
 }
 
+/// Web content reached the context outside bypass mode: tests no longer run in the background.
+fn watch_paused(env: &Env, reads: &Reads) -> bool {
+    !env.settings.unattended() && reads.untrusted()
+}
+
 /// Live test runner seen from one turn: which results the model has seen, when the agent last edited.
 struct LiveTurn {
     runner: Option<Arc<Runner>>,
@@ -246,6 +252,15 @@ impl LiveTurn {
     fn failing_now(&self) -> Option<String> {
         let last = self.runner.as_ref()?.status().last?;
         (!last.ok).then(|| last.note())
+    }
+
+    /// The watcher stops for good this turn; `true` the first time (the model is told once).
+    fn suspend(&mut self, root: &std::path::Path) -> bool {
+        self.edited = None;
+        self.runner.take().is_some_and(|_| {
+            livetest::stop(root);
+            true
+        })
     }
 
     fn edited(&mut self) {
@@ -368,6 +383,9 @@ async fn run_tools(conv: &mut Conversation, ctx: &ToolCtx<'_>, calls: &[ToolCall
         }
     }
     let Some((call, mut output)) = held else { return };
+    if watch_paused(ctx.env, ctx.reads) && live.suspend(&ctx.root) {
+        output.text.push_str("\n\n[live-tests] suspendus : contenu web dans le contexte (les tests ne tournent plus sans validation).");
+    }
     if !changed.is_empty() {
         live.edited();
     }

@@ -125,12 +125,29 @@ mod tests {
         assert!(Reads::from_history(&history).untrusted(), "un historique avec du web reste marqué");
     }
 
-    fn workspace(name: &str) -> std::path::PathBuf {
+    /// Temporary workspace, removed when the test ends (pass or fail).
+    struct Workspace(std::path::PathBuf);
+
+    impl std::ops::Deref for Workspace {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Workspace {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn workspace(name: &str) -> Workspace {
         let dir = std::env::temp_dir().join(format!("omega-reads-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = std::fs::File::create(dir.join("a.rs")).unwrap();
         file.set_modified(SystemTime::now() - Duration::from_secs(3600)).unwrap();
-        dir
+        Workspace(dir)
     }
 
     fn history(args: &str, output: &str) -> Vec<Message> {

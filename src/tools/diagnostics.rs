@@ -10,13 +10,25 @@ use super::{code::rel_path, compress::clip, shell};
 const TIMEOUT_SECS: usize = 240;
 const MAX_CHARS: usize = 3000;
 
-/// Files that the checker would execute while compiling (build scripts, manifests that add them or dependencies).
+/// Files that the checker would execute while compiling (build scripts, manifests that add them or dependencies,
+/// cargo configuration that names a wrapper or runner, toolchain files that point to another compiler).
 pub fn builds(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_lowercase();
+    let in_cargo_dir = path.parent().and_then(Path::file_name).is_some_and(|d| d.eq_ignore_ascii_case(".cargo"));
     matches!(
         name.as_str(),
-        "build.rs" | "cargo.toml" | "package.json" | "tsconfig.json" | "setup.py" | "pyproject.toml" | "go.mod" | "cmakelists.txt"
-    )
+        "build.rs"
+            | "cargo.toml"
+            | "package.json"
+            | "tsconfig.json"
+            | "setup.py"
+            | "pyproject.toml"
+            | "go.mod"
+            | "go.work"
+            | "cmakelists.txt"
+            | "rust-toolchain"
+            | "rust-toolchain.toml"
+    ) || (in_cargo_dir && matches!(name.as_str(), "config" | "config.toml"))
 }
 
 /// `None` when no checker applies to the changed files.

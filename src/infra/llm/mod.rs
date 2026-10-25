@@ -562,6 +562,20 @@ fn anthropic_headers(req: RequestBuilder, token: &str, oauth: bool, deferred: bo
     if oauth { req.header("authorization", format!("Bearer {token}")) } else { req.header("x-api-key", token) }
 }
 
+/// Empty or malformed tool arguments become `{}` so the tool can report a missing argument instead of crashing.
+fn arguments(raw: &Value) -> Value {
+    raw.as_str()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
+}
+
+/// `data:<media type>;base64,<data>` → `(media type, data)`.
+fn data_url(url: &str) -> Option<(&str, &str)> {
+    url.strip_prefix("data:")?.split_once(";base64,")
+}
+
 /// One readable line out of any provider error body.
 pub fn error_text(body: &str) -> String {
     serde_json::from_str::<Value>(body)

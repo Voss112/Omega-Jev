@@ -193,7 +193,7 @@ fn assistant_blocks(m: &Value, calls: &[&Value], ids: &[String]) -> Vec<Value> {
             "type": "tool_use",
             "id": ids[k],
             "name": calls[k]["function"]["name"].as_str().unwrap_or_default(),
-            "input": arguments(&calls[k]["function"]["arguments"]),
+            "input": super::arguments(&calls[k]["function"]["arguments"]),
         })
     };
     let text = |t: &str| (!t.trim().is_empty()).then(|| json!({ "type": "text", "text": t }));
@@ -252,25 +252,12 @@ fn user_blocks(content: &Value) -> Vec<Value> {
                 Some(json!({ "type": "text", "text": text }))
             }
             "image_url" => {
-                let (media, data) = data_url(p["image_url"]["url"].as_str()?)?;
+                let (media, data) = super::data_url(p["image_url"]["url"].as_str()?)?;
                 Some(json!({ "type": "image", "source": { "type": "base64", "media_type": media, "data": data } }))
             }
             _ => None,
         })
         .collect()
-}
-
-fn data_url(url: &str) -> Option<(&str, &str)> {
-    url.strip_prefix("data:")?.split_once(";base64,")
-}
-
-/// Empty or malformed arguments become `{}` so the tool can report a missing argument instead of crashing.
-fn arguments(raw: &Value) -> Value {
-    raw.as_str()
-        .filter(|s| !s.trim().is_empty())
-        .and_then(|s| serde_json::from_str::<Value>(s).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}))
 }
 
 fn tool_schema(schema: &Value) -> Value {

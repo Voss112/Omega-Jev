@@ -100,7 +100,7 @@ pub fn request(conv: &Conversation, env: &Env, system: &str, replay: bool) -> Va
         let tools = (!conv.toolset.is_empty()).then(|| schema::schemas(&conv.toolset));
         return env.llm.body(&messages, tools);
     }
-    let mut messages = surface_additions(messages, &conv.messages[from..]);
+    let mut messages = surface_additions(messages, visible);
     if target.vision {
         attach_screenshot(&mut messages, visible);
     }

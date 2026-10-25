@@ -276,7 +276,8 @@ impl App {
         if !settings.live_tests || settings.workspace != self.settings.workspace {
             crate::tools::livetest::stop_all();
         }
-        let updates = !self.settings.auto_update && settings.auto_update;
+        // The update loop follows the option and the proxy (it holds the HTTP client it started with).
+        let updates = self.settings.auto_update != settings.auto_update || (settings.auto_update && self.settings.proxy != settings.proxy);
         // Texts built by the runtime (self-tests, quota labels) are re-read in the new language.
         let relabel = self.settings.ui_lang != settings.ui_lang;
         if settings.autostart != self.settings.autostart
@@ -760,16 +761,17 @@ fn markdown(conv: &Conversation) -> String {
     for m in &conv.messages {
         let _ = match m.role {
             Role::User => {
-                let _ = write!(out, "## Vous\n\n{}\n\n", m.content);
+                let _ = write!(out, "## {}\n\n{}\n\n", tr("Vous", "You"), m.content);
                 m.route.as_ref().map_or(Ok(()), |r| {
                     writeln!(
                         out,
-                        "> 🧭 {:?} · skill {} · playbook {} · web {:.0}% · code {:.0}% · risque {:.0}% · impact {:.0}% · apps {:.0}%\n",
+                        "> 🧭 {:?} · skill {} · playbook {} · web {:.0}% · code {:.0}% · {} {:.0}% · impact {:.0}% · apps {:.0}%\n",
                         r.source,
                         r.skill.id(),
                         r.playbook.as_deref().unwrap_or("-"),
                         r.web * 100.0,
                         r.code * 100.0,
+                        tr("risque", "risk"),
                         r.risk * 100.0,
                         r.blast * 100.0,
                         r.apps * 100.0

@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn claude_url_is_ready_to_open() {
         let (url, login) = claude_start();
-        assert!(url.starts_with("https://claude.ai/oauth/authorize?"));
+        assert!(url.starts_with("https://claude.com/cai/oauth/authorize?"));
         assert_eq!(login.provider, Provider::Claude);
         assert_eq!(login.state.len(), 64);
         assert!(login.accepts_paste());

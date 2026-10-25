@@ -228,8 +228,8 @@ fn evict(pages: &mut Vec<Page>, max_pages: usize, max_bytes: usize) -> bool {
 /// Rewrites the whole file (drops superseded duplicates and evicted pages).
 fn write_all(file: &Path, pages: &[Page]) -> Result<()> {
     let lines: Vec<String> = pages.iter().filter_map(|p| serde_json::to_string(p).ok()).collect();
-    fs::write(file, lines.join("\n") + "\n")?;
-    Ok(())
+    // Atomic: a crash mid-rewrite must not leave a truncated cache behind.
+    crate::infra::store::write_private(file, (lines.join("\n") + "\n").as_bytes())
 }
 
 fn tokens(text: &str) -> impl Iterator<Item = String> + '_ {

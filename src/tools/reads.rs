@@ -30,10 +30,23 @@ pub struct Reads {
     seen: Mutex<HashMap<ReadKey, DateTime<Utc>>>,
     /// Web pages or third-party tool output reached the model: a prompt injection may now steer it.
     untrusted: AtomicBool,
+    /// A README, a note or a copied web page was read: its text can hold instructions too.
+    prose: AtomicBool,
 }
 
 /// Tools whose output comes from outside the user's machine.
 const OUTSIDE: [ToolKind; 4] = [ToolKind::WebFetch, ToolKind::WebSearch, ToolKind::Kits, ToolKind::CliAnything];
+
+/// Files written to be read by a human or an agent, not files of code the user wrote.
+const PROSE_EXT: [&str; 6] = ["md", "markdown", "txt", "rst", "html", "htm"];
+
+fn prose(path: &str) -> bool {
+    Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| PROSE_EXT.iter().any(|p| e.eq_ignore_ascii_case(p)))
+}
+
+fn reads_prose(arguments: &str) -> bool {
+    serde_json::from_str::<Value>(arguments).ok().and_then(|a| a["path"].as_str().map(prose)).unwrap_or(false)
+}
 
 pub fn key(path: &str, start: Option<usize>, end: Option<usize>) -> ReadKey {
     let path = path.trim().replace('\\', "/");
@@ -43,11 +56,8 @@ pub fn key(path: &str, start: Option<usize>, end: Option<usize>) -> ReadKey {
 impl Reads {
     /// Successful reads still visible to the model (pass the messages after any summary).
     pub fn from_history(messages: &[Message]) -> Self {
-        let results: HashMap<&str, &Message> = messages
-            .iter()
-            .filter(|m| m.role == Role::Tool)
-            .filter_map(|m| Some((m.tool_call_id.as_deref()?, m)))
-            .collect();
+        let results: HashMap<&str, &Message> =
+            messages.iter().filter(|m| m.role == Role::Tool).filter_map(|m| Some((m.tool_call_id.as_deref()?, m))).collect();
         let mut seen = HashMap::new();
         let untrusted = messages
             .iter()
@@ -67,18 +77,30 @@ impl Reads {
             let num = |k: &str| args[k].as_u64().map(|n| n as usize);
             seen.insert(key(path, num("start"), num("end")), result.at);
         }
-        Self { seen: Mutex::new(seen), untrusted: AtomicBool::new(untrusted) }
+        let prose = messages
+            .iter()
+            .flat_map(|m| &m.tool_calls)
+            .any(|c| matches!(ToolKind::parse(&c.name), Some(ToolKind::ReadFile | ToolKind::Grep)) && reads_prose(&c.arguments));
+        Self { seen: Mutex::new(seen), untrusted: AtomicBool::new(untrusted), prose: AtomicBool::new(prose) }
     }
 
     /// A tool of `kind` just ran: outside content may now be in the context.
-    pub fn ran(&self, kind: ToolKind) {
+    pub fn ran(&self, kind: ToolKind, args: &Value) {
         if OUTSIDE.contains(&kind) {
             self.untrusted.store(true, Ordering::Relaxed);
+        }
+        if matches!(kind, ToolKind::ReadFile | ToolKind::Grep) && args["path"].as_str().is_some_and(prose) {
+            self.prose.store(true, Ordering::Relaxed);
         }
     }
 
     pub fn untrusted(&self) -> bool {
         self.untrusted.load(Ordering::Relaxed)
+    }
+
+    /// Outside content **or** prose the agent read: a README can carry instructions, so desktop input stays gated.
+    pub fn untrusted_input(&self) -> bool {
+        self.untrusted() || self.prose.load(Ordering::Relaxed)
     }
 
     /// The stub when this exact range was read and the file has not been written since.
@@ -116,13 +138,26 @@ mod tests {
     #[test]
     fn web_content_marks_the_turn_untrusted() {
         let local = Reads::from_history(&[]);
-        local.ran(ToolKind::ReadFile);
+        local.ran(ToolKind::ReadFile, &serde_json::json!({ "path": "src/main.rs" }));
         assert!(!local.untrusted());
-        local.ran(ToolKind::WebFetch);
+        assert!(!local.untrusted_input(), "lire du code n'est pas du texte d'instruction");
+        local.ran(ToolKind::ReadFile, &serde_json::json!({ "path": "README.md" }));
+        assert!(local.untrusted_input(), "un README peut porter des instructions");
+        assert!(!local.untrusted(), "le shell reste gouverné par le web seul");
+        local.ran(ToolKind::WebFetch, &serde_json::json!({}));
         assert!(local.untrusted());
         let call = ToolCall { id: "w".into(), name: "web_search".into(), ..ToolCall::default() };
         let history = [Message::assistant(String::new(), String::new(), vec![call])];
         assert!(Reads::from_history(&history).untrusted(), "un historique avec du web reste marqué");
+        let doc = ToolCall {
+            id: "r".into(),
+            name: "read_file".into(),
+            arguments: r#"{"path":"docs/notes.md"}"#.into(),
+            ..ToolCall::default()
+        };
+        let history = [Message::assistant(String::new(), String::new(), vec![doc])];
+        let reads = Reads::from_history(&history);
+        assert!(reads.untrusted_input() && !reads.untrusted(), "un fichier de prose relu reste suivi");
     }
 
     /// Temporary workspace, removed when the test ends (pass or fail).

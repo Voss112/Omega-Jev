@@ -73,7 +73,7 @@ pub async fn run(ctx: &ToolCtx<'_>, call: &ToolCall) -> ToolOutput {
                 Err(anyhow!("tool `{}` disabled by the user", call.name))
             }
             Some(kind) => {
-                ctx.reads.ran(kind);
+                ctx.reads.ran(kind, &args);
                 exec(ctx, kind, Args(&args)).await
             }
             None => Err(anyhow!("unknown tool `{}`", call.name)),

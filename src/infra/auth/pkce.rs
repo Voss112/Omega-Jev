@@ -82,12 +82,16 @@ async fn serve(listener: TcpListener, state: &str) -> Result<String> {
             continue;
         };
         let params = parse_query(query);
-        let state_ok = params.iter().any(|(k, v)| k == "state" && v == state);
-        let body = if state_ok { "Connexion reussie. Revenez a Omega." } else { "Etat invalide. Recommencez." };
-        respond(&mut socket, body).await;
-        if !state_ok {
+        let Some((_, got)) = params.iter().find(|(k, _)| k == "state") else {
+            // Not the OAuth callback (favicon, a port probe): answer and keep waiting.
+            respond(&mut socket, "Omega attend la connexion.").await;
+            continue;
+        };
+        if got != state {
+            respond(&mut socket, "Etat invalide. Recommencez.").await;
             bail!("state OAuth invalide");
         }
+        respond(&mut socket, "Connexion reussie. Revenez a Omega.").await;
         if let Some((_, err)) = params.iter().find(|(k, _)| k == "error") {
             bail!("OAuth refusé : {err}");
         }
@@ -189,5 +193,17 @@ mod tests {
         let server = tokio::spawn(async move { await_code(port, "good", Duration::from_secs(5)).await });
         assert!(get(port, "state=bad&code=abc123").await);
         assert!(server.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn loopback_ignores_a_stray_request() {
+        let pkce = Pkce::new();
+        let port = local_port();
+        let state = pkce.state.clone();
+        let server = tokio::spawn(async move { await_code(port, &state, Duration::from_secs(5)).await });
+        assert!(get(port, "foo=bar").await, "la sonde doit être acceptée puis ignorée");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(get(port, &format!("state={}&code=abc123", pkce.state)).await);
+        assert_eq!(server.await.unwrap().unwrap(), "abc123", "la connexion réelle aboutit encore");
     }
 }

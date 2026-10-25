@@ -89,7 +89,7 @@ static RISKY: Rules = LazyLock::new(|| {
         ),
         (r"(?i)\b(kill|pkill|killall|taskkill|stop-process)\b", "arrêt de processus"),
         (
-            r"(?i)\b(pip3?|npm|pnpm|yarn|cargo|go|winget|choco|scoop|apt|apt-get|dnf|pacman|brew)\s+(install|add|uninstall|remove|i)\b",
+            r"(?i)\b(pip3?|pipx|uv|conda|mamba|npm|pnpm|yarn|bun|cargo|go|winget|choco|scoop|apt|apt-get|dnf|pacman|brew)\s+(install|add|ci|i|uninstall|remove|exec|link|dlx)\b",
             "installation de paquets",
         ),
         (r"(?i)\b(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod|scp|ssh|rsync|ftp)\b", "accès réseau"),
@@ -100,11 +100,18 @@ static RISKY: Rules = LazyLock::new(|| {
             "écriture de fichier via le shell (préférer write_file/edit_file : annulation + diagnostics)",
         ),
         (
-            r"(?i)\b(python3?|py|node|deno|bun|perl|ruby|php|powershell|pwsh|cmd|bash|sh|zsh)(\.exe)?\s+(-c|-e|--eval|-command|/c|-encodedcommand)\b|\b(iex|invoke-expression|start-process)\b",
+            r"(?i)\b(python3?|py|node|deno|bun|perl|ruby|php|powershell|pwsh|cmd|bash|sh|zsh)(\.exe)?\s+(-c|-e|-ec|-enc|-command|-commandwithargs|-encodedarguments|-encodedcommand|--eval|/c|/k|/r)\b|\b(iex|invoke-expression|start-process)\b",
             "code inline ou exécution indirecte",
         ),
+        // PowerShell hides the window of a payload: `-w hidden` / `-WindowStyle Hidden` (audit 2026-10-25).
+        (r"(?i)\b(powershell|pwsh)(\.exe)?\b[^|;&\n]*\s-(w|windowstyle)\s+hidden\b", "fenêtre masquée (PowerShell)"),
+        // Python modules that install code, serve the workspace over the network or open a shell (audit 2026-10-25).
         (
-            r#"(?i)\.\.[\\/]|(^|[\s"'=(])\.\.([\s"'|;)]|$)|(^|[\s"'=(])[\\/]([\s"'|;)]|$)|(^|[\s"'=>(])([a-z]:[\\/]|\\\\[\w.?$-]+\\|~[\\/]|\$env:|\$home\b|%[a-z]+%|/(etc|usr|bin|sbin|var|root|home|boot|sys|proc|dev|opt|tmp)\b)"#,
+            r"(?i)\b(python3?|py)(\.exe)?\s+(-[a-z-]+\s+)*-m\s+(pip|ensurepip|venv|http\.server|smtpd|xmlrpc\.server|pydoc|zipapp|webbrowser)\b",
+            "module Python qui installe, sert des fichiers ou ouvre le réseau",
+        ),
+        (
+            r#"(?i)\.\.[\\/]|(^|[\s"'=(])\.\.([\s"'|;)]|$)|(^|[\s"'=(])[\\/]([\s"'|;)]|$)|(^|[\s"'=>(])([a-z]:[\\/]|\\\\[\w.?$-]+\\|~[\\/]|\$env:|\$home\b|%[a-z]+%|/(etc|usr|bin|sbin|var|root|home|boot|sys|proc|dev|opt|tmp)\b)|(^|[\s"'=(])//[^/\s]"#,
             "chemin hors du dossier de travail",
         ),
     ])
@@ -345,6 +352,11 @@ pub fn self_test() -> Result<String> {
     ensure!(!matches!(assess("Write-Output (calc)"), Verdict::Safe), "sous-expression non inspectée");
     ensure!(matches!(assess("gci | Where-Object { $_.Length -gt 5 }"), Verdict::Safe), "filtre PowerShell refusé");
     ensure!(resolve_writable(&tmp, ".GIT/hooks/pre-commit").is_err(), "écriture .GIT autorisée");
+    ensure!(matches!(assess("type //attacker.example/share/x"), Verdict::Risky(_)), "chemin UNC en barres obliques non détecté");
+    ensure!(matches!(assess("powershell -enc AAAA"), Verdict::Risky(_)), "commande encodée non détectée");
+    ensure!(matches!(assess("python -m http.server 8080"), Verdict::Risky(_)), "serveur HTTP non détecté");
+    ensure!(matches!(assess("npm ci"), Verdict::Risky(_)), "npm ci non détecté");
+    ensure!(matches!(assess("echo https://example.com/x"), Verdict::Safe), "URL refusée à tort");
     Ok(format!("{} règles bloquantes, {} à risque", BLOCKED.len(), RISKY.len()))
 }
 
@@ -390,6 +402,19 @@ mod tests {
             "sed 'e' notes.txt",
             r"gc \\?\C:\Windows\win.ini",
             r"gci \\server\share",
+            // Audit 2026-10-25 : UNC en barres obliques, commandes PowerShell déguisées, installateurs et serveurs.
+            "type //server/share/x",
+            "ls //server/share",
+            "powershell -enc AAAA",
+            "powershell -ec AAAA",
+            "pwsh -windowstyle hidden -c x",
+            "cmd /k calc",
+            "python -m http.server 8080",
+            "py -m smtpd -n -c DebuggingServer",
+            "pipx install x",
+            "uv add x",
+            "npm ci",
+            "npm exec x",
         ] {
             assert!(matches!(assess(cmd), Verdict::Risky(_)), "{cmd}");
         }

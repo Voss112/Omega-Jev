@@ -25,10 +25,14 @@ fn int(args: &Value, key: &str) -> Result<i32> {
 pub async fn run(ctx: &ToolCtx<'_>, args: &Value) -> Result<ToolOutput> {
     ensure!(ctx.env.settings.computer, "contrôle du bureau désactivé (Paramètres → Agent)");
     let action = args["action"].as_str().unwrap_or("screenshot").to_owned();
-    // Keys and clicks reach any program (Win+R, a terminal): after web content they would bypass the shell guard.
-    if action != "screenshot" && ctx.reads.untrusted() {
-        let reason = "contrôle du bureau après lecture de contenu web (injection possible)".to_owned();
-        ensure!(super::approve(ctx, ApprovalKind::Command, format!("computer {args}"), reason).await, "action refused by the user");
+    // Keys and clicks reach any program (Win+R, a terminal): after web content or a README they bypass the shell guard.
+    if action != "screenshot" && ctx.reads.untrusted_input() {
+        let reason =
+            "contrôle du bureau après lecture de contenu non fiable (page web, README, notes): injection possible".to_owned();
+        ensure!(
+            super::approve(ctx, ApprovalKind::Command, format!("computer {args}"), reason).await,
+            "action refused by the user"
+        );
     }
     let args = args.clone();
     let done = tokio::task::spawn_blocking(move || act(&action, &args)).await??;

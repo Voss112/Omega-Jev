@@ -78,7 +78,7 @@ pub fn request(conv: &Conversation, env: &Env, system: &str, replay: bool) -> Va
     let target = Target {
         vision: env.llm.engine.vision(),
         parts: replay && env.llm.wire() == Wire::Anthropic,
-        reasoning: env.llm.engine == Engine::DeepSeek,
+        reasoning: matches!(env.llm.engine, Engine::DeepSeek | Engine::Kimi),
         signatures: (env.llm.engine == Engine::Gemini).then(|| env.llm.wire()),
     };
     let mut messages = vec![json!({ "role": "system", "content": system })];

@@ -24,10 +24,16 @@ pub fn body(model: &str, engine: Engine, effort: Effort, messages: &[Value], too
         // Google's endpoint knows none/low/medium/high: Off really turns thinking off, Max is its highest level.
         (Engine::Gemini, Effort::Off) => Some("none"),
         (Engine::Gemini, Effort::Max) => Some("high"),
+        // Moonshot has no effort levels: thinking is a switch (below).
+        (Engine::Kimi, _) => None,
         _ => effort.openai(),
     };
     if let Some(e) = reasoning {
         body["reasoning_effort"] = json!(e);
+    }
+    if engine == Engine::Kimi {
+        body["max_tokens"] = json!(MAX_OUTPUT);
+        body["thinking"] = json!({ "type": if effort == Effort::Off { "disabled" } else { "enabled" } });
     }
     if engine == Engine::DeepSeek {
         body["max_tokens"] = json!(MAX_OUTPUT);
@@ -203,6 +209,14 @@ mod tests {
         let off = body("deepseek-flash", Engine::DeepSeek, Effort::Off, &[], None);
         assert!(off.get("reasoning_effort").is_none());
         assert_eq!(off["thinking"]["type"], "disabled", "Off coupe la réflexion (sinon facturée en high)");
+    }
+
+    #[test]
+    fn kimi_thinks_by_switch_without_effort_levels() {
+        let on = body("kimi-k3.1-pro", Engine::Kimi, Effort::High, &[], None);
+        assert!(on.get("reasoning_effort").is_none());
+        assert_eq!((on["thinking"]["type"].as_str(), on["max_tokens"].as_u64()), (Some("enabled"), Some(65_536)));
+        assert_eq!(body("kimi-k3.1-pro", Engine::Kimi, Effort::Off, &[], None)["thinking"]["type"], "disabled");
     }
 
     #[test]

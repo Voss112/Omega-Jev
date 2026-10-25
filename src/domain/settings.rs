@@ -84,6 +84,10 @@ pub struct Settings {
     pub gemini_auth: AuthMode,
     /// Fast Gemini model that takes delegated work.
     pub gemini_flash_model: String,
+    pub kimi_key: String,
+    /// Moonshot's OpenAI-compatible endpoint.
+    pub kimi_url: String,
+    pub kimi_model: String,
     /// Effort chosen per engine: the ceiling Jev's estimate may lower (never raise).
     pub effort: Efforts,
     /// Jev lowers the effort of easy turns (below the user's choice, when it keeps the cache).
@@ -165,6 +169,9 @@ impl Default for Settings {
             gemini_model: "gemini-3.8-pro".into(),
             gemini_auth: AuthMode::Subscription,
             gemini_flash_model: "gemini-3.8-flash".into(),
+            kimi_key: String::new(),
+            kimi_url: "https://api.moonshot.ai/v1".into(),
+            kimi_model: "kimi-k3.1-pro".into(),
             effort: Efforts::default(),
             auto_effort: true,
             delegate: true,
@@ -211,6 +218,7 @@ impl Settings {
             Engine::DeepSeek => (&self.deepseek_url, &self.deepseek_key, model),
             Engine::Claude => (&self.claude_url, &self.claude_key, model),
             Engine::Gemini => (&self.gemini_url, &self.gemini_key, model),
+            Engine::Kimi => (&self.kimi_url, &self.kimi_key, model),
         }
     }
 
@@ -220,6 +228,7 @@ impl Settings {
             Engine::DeepSeek => &self.deepseek_model,
             Engine::Claude => &self.claude_model,
             Engine::Gemini => &self.gemini_model,
+            Engine::Kimi => &self.kimi_model,
         }
     }
 
@@ -229,6 +238,7 @@ impl Settings {
             Engine::DeepSeek => &mut self.deepseek_model,
             Engine::Claude => &mut self.claude_model,
             Engine::Gemini => &mut self.gemini_model,
+            Engine::Kimi => &mut self.kimi_model,
         };
         slot.clear();
         slot.push_str(id.trim());
@@ -237,7 +247,7 @@ impl Settings {
     /// Auth mode of `engine` (API keys are the only option for DeepSeek).
     pub fn auth_mode(&self, engine: Engine) -> AuthMode {
         match engine {
-            Engine::DeepSeek => AuthMode::ApiKey,
+            Engine::DeepSeek | Engine::Kimi => AuthMode::ApiKey,
             Engine::Claude => self.claude_auth,
             Engine::Gemini => self.gemini_auth,
         }
@@ -272,10 +282,12 @@ max_steps = 24
     }
 
     #[test]
-    fn retired_engines_fall_back_to_their_closest_successor() {
+    fn kimi_and_gemini_settings_load() {
         let kimi: Settings =
-            toml::from_str("engine = \"kimi\"\nkimi_key = \"x\"\n[effort]\nkimi = \"high\"\n").expect("kimi retiré");
-        assert_eq!(kimi.engine, Engine::DeepSeek);
+            toml::from_str("engine = \"kimi\"\nkimi_key = \"x\"\n[effort]\nkimi = \"high\"\n").expect("kimi revenu");
+        assert_eq!(kimi.engine, Engine::Kimi);
+        assert_eq!(kimi.endpoint(Engine::Kimi), ("https://api.moonshot.ai/v1", "x", "kimi-k3.1-pro"));
+        assert_eq!(kimi.auth_mode(Engine::Kimi), AuthMode::ApiKey);
         let gemini: Settings = toml::from_str("engine = \"gemini\"\ngemini_auth = \"api_key\"\n").expect("gemini revenu");
         assert_eq!((gemini.engine, gemini.gemini_auth), (Engine::Gemini, AuthMode::ApiKey));
     }

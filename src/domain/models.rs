@@ -37,6 +37,7 @@ const CLAUDE: &[Model] = &[
     Model { id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
 ];
 const DEEPSEEK: &[Model] = &[Model { id: "deepseek-flash", name: "DeepSeek V4.1 Flash" }];
+const KIMI: &[Model] = &[Model { id: "kimi-k3.1-pro", name: "Kimi K3.1 Pro" }];
 const GEMINI: &[Model] = &[
     Model { id: "gemini-3.8-pro", name: "Gemini 3.8 Pro" },
     Model { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
@@ -50,6 +51,7 @@ pub fn suggested(engine: Engine) -> &'static [Model] {
         Engine::DeepSeek => DEEPSEEK,
         Engine::Claude => CLAUDE,
         Engine::Gemini => GEMINI,
+        Engine::Kimi => KIMI,
     }
 }
 

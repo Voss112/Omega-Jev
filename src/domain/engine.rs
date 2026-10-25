@@ -86,30 +86,33 @@ impl Effort {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Engine {
-    /// Default. Also takes in settings written when Kimi K3.1 Pro (retired) was selected.
+    /// Default.
     #[default]
-    #[serde(alias = "deepseek", alias = "kimi")]
+    #[serde(alias = "deepseek")]
     DeepSeek,
     Claude,
     /// Google AI Pro/Ultra subscription (Code Assist) or a Gemini API key.
     Gemini,
+    /// Moonshot API key (OpenAI-compatible endpoint).
+    Kimi,
 }
 
 impl Engine {
-    pub const ALL: [Engine; 3] = [Self::DeepSeek, Self::Claude, Self::Gemini];
+    pub const ALL: [Engine; 4] = [Self::DeepSeek, Self::Claude, Self::Gemini, Self::Kimi];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::DeepSeek => "DeepSeek V4.1 Flash",
             Self::Claude => "Claude",
             Self::Gemini => "Gemini",
+            Self::Kimi => "Kimi K3.1 Pro",
         }
     }
 
     /// Native wire; a Gemini API key speaks the OpenAI-compatible endpoint instead (see `Llm::wire`).
     pub fn wire(self) -> Wire {
         match self {
-            Self::DeepSeek => Wire::OpenAi,
+            Self::DeepSeek | Self::Kimi => Wire::OpenAi,
             Self::Claude => Wire::Anthropic,
             Self::Gemini => Wire::Gemini,
         }
@@ -118,6 +121,7 @@ impl Engine {
     pub fn default_effort(self) -> Effort {
         match self {
             Self::DeepSeek => Effort::Max,
+            Self::Kimi => Effort::High,
             Self::Claude | Self::Gemini => Effort::Medium,
         }
     }
@@ -128,6 +132,7 @@ impl Engine {
             Self::DeepSeek => "DEEPSEEK_API_KEY",
             Self::Claude => "ANTHROPIC_API_KEY",
             Self::Gemini => "GEMINI_API_KEY",
+            Self::Kimi => "MOONSHOT_API_KEY",
         }
     }
 
@@ -149,6 +154,7 @@ pub struct Efforts {
     pub deepseek: Effort,
     pub claude: Effort,
     pub gemini: Effort,
+    pub kimi: Effort,
 }
 
 impl Default for Efforts {
@@ -157,6 +163,7 @@ impl Default for Efforts {
             deepseek: Engine::DeepSeek.default_effort(),
             claude: Engine::Claude.default_effort(),
             gemini: Engine::Gemini.default_effort(),
+            kimi: Engine::Kimi.default_effort(),
         }
     }
 }
@@ -167,6 +174,7 @@ impl Efforts {
             Engine::DeepSeek => self.deepseek,
             Engine::Claude => self.claude,
             Engine::Gemini => self.gemini,
+            Engine::Kimi => self.kimi,
         }
     }
 
@@ -175,6 +183,7 @@ impl Efforts {
             Engine::DeepSeek => self.deepseek = effort,
             Engine::Claude => self.claude = effort,
             Engine::Gemini => self.gemini = effort,
+            Engine::Kimi => self.kimi = effort,
         }
     }
 }
@@ -185,7 +194,7 @@ mod tests {
 
     #[test]
     fn defaults_and_labels_cover_every_engine() {
-        assert_eq!(Engine::ALL.len(), 3);
+        assert_eq!(Engine::ALL.len(), 4);
         assert_eq!(Engine::default(), Engine::DeepSeek);
         assert_eq!(Engine::default_effort(Engine::DeepSeek), Effort::Max);
         assert_eq!(Engine::wire(Engine::Claude), Wire::Anthropic);

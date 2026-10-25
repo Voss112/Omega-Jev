@@ -29,10 +29,11 @@ fn entry(group: &'static str, name: &'static str, result: Result<String>) -> Hea
 }
 
 pub async fn check(env: &Env) -> Vec<Health> {
-    let (deepseek, claude, gemini, jev, ddg, sh, apps) = tokio::join!(
+    let (deepseek, claude, gemini, kimi, jev, ddg, sh, apps) = tokio::join!(
         engine(env, Engine::DeepSeek),
         engine(env, Engine::Claude),
         engine(env, Engine::Gemini),
+        engine(env, Engine::Kimi),
         jev(env),
         web::probe(&env.http),
         shell::probe(),
@@ -63,6 +64,7 @@ pub async fn check(env: &Env) -> Vec<Health> {
         entry("Moteurs IA", Engine::DeepSeek.label(), deepseek),
         entry("Moteurs IA", Engine::Claude.label(), claude),
         entry("Moteurs IA", Engine::Gemini.label(), gemini),
+        entry("Moteurs IA", Engine::Kimi.label(), kimi),
         entry("Moteurs IA", "Jev System One", jev),
         entry("Moteurs IA", "Délégation Flash", delegation(env)),
         entry("Code", "Tree-sitter AST", ts),

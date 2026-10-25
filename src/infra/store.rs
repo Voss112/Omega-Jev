@@ -24,11 +24,12 @@ pub fn load_settings() -> (Settings, Option<String>) {
             return (Settings::default(), Some(notice));
         }
     };
-    let keys = [&s.deepseek_key, &s.claude_key, &s.gemini_key, &s.jev_key];
+    let keys = [&s.deepseek_key, &s.claude_key, &s.gemini_key, &s.kimi_key, &s.jev_key];
     let migrate = keys.iter().any(|k| !secret::is_sealed(k));
     s.deepseek_key = secret::open(&s.deepseek_key);
     s.claude_key = secret::open(&s.claude_key);
     s.gemini_key = secret::open(&s.gemini_key);
+    s.kimi_key = secret::open(&s.kimi_key);
     s.jev_key = secret::open(&s.jev_key);
     if migrate && cfg!(windows) {
         let _ = save_settings(&s);
@@ -46,6 +47,7 @@ fn sealed(settings: &Settings) -> Result<Settings> {
         deepseek_key: secret::seal(settings.deepseek_key.trim())?,
         claude_key: secret::seal(settings.claude_key.trim())?,
         gemini_key: secret::seal(settings.gemini_key.trim())?,
+        kimi_key: secret::seal(settings.kimi_key.trim())?,
         jev_key: secret::seal(settings.jev_key.trim())?,
         ..settings.clone()
     })

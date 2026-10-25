@@ -250,6 +250,7 @@ fn form(
         secret(ui, "DeepSeek", &mut s.deepseek_key, "sk-…  (platform.deepseek.com)");
         secret(ui, "Claude (API)", &mut s.claude_key, tr("sk-ant-… (platform.claude.com) — inutile en abonnement", "sk-ant-… (platform.claude.com) — not needed with a subscription"));
         secret(ui, "Gemini (API)", &mut s.gemini_key, tr("AIza… (aistudio.google.com) — inutile en abonnement", "AIza… (aistudio.google.com) — not needed with a subscription"));
+        secret(ui, "Kimi (Moonshot)", &mut s.kimi_key, "sk-…  (platform.moonshot.ai)");
         secret(ui, "Jev (TypeSafe)", &mut s.jev_key, tr("console.typesafe.ai — requis pour le routage Jev", "console.typesafe.ai — required for Jev routing"));
     });
     widgets::form_section(ui, Icon::Cube, tr("Modèles", "Models"));
@@ -274,6 +275,8 @@ fn form(
         text(ui, "URL Gemini", &mut s.gemini_url, tr("endpoint OpenAI-compatible des clés API (ignorée en abonnement)", "OpenAI-compatible endpoint for API keys (ignored with a subscription)"));
         text(ui, tr("Modèle Gemini", "Gemini model"), &mut s.gemini_model, "gemini-3.8-pro");
         text(ui, "Gemini Flash", &mut s.gemini_flash_model, tr("gemini-3.8-flash — reçoit le travail délégué", "gemini-3.8-flash — receives delegated work"));
+        text(ui, "URL Kimi", &mut s.kimi_url, "https://api.moonshot.ai/v1");
+        text(ui, tr("Modèle Kimi", "Kimi model"), &mut s.kimi_model, "kimi-k3.1-pro");
         text(ui, "URL Jev", &mut s.jev_url, "");
         text(ui, tr("Modèle Jev", "Jev model"), &mut s.jev_model, tr("jev-latest ou version épinglée", "jev-latest or a pinned version"));
     });

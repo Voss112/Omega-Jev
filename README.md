@@ -19,7 +19,7 @@
 Omega splits the work between two systems:
 
 - **System One — Jev (TypeSafe)** makes every control decision: skill, reasoning budget, web access, risk, impact.
-- **System Two — DeepSeek V4.1 Flash, Claude or Gemini** writes the code and runs the tools.
+- **System Two — DeepSeek V4.1 Flash, Claude, Gemini or Kimi K3.1 Pro (Moonshot API)** writes the code and runs the tools.
 
 Pick the provider, the exact model and the effort level right in the input box. The model actually used stays visible in the header, on every reply and in the Tools panel.
 
@@ -43,7 +43,7 @@ Pick the provider, the exact model and the effort level right in the input box. 
 4. Claude and Gemini connect through the **Sign in** button (subscription) or an API key.
 5. Pick a working folder (📁, bottom left). Default: `Documents\Omega`.
 
-Keys can also come from environment variables: `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `TYPESAFE_API_KEY`.
+Keys can also come from environment variables: `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `MOONSHOT_API_KEY`, `TYPESAFE_API_KEY`.
 
 > Voice dictation uses `vulkan-1.dll`, which ships with every GPU driver.
 
